@@ -334,46 +334,107 @@ def search_kode(driver, kode, fr):
     say(f"  [FAIL] Kode tidak muncul dalam 12s. Grid rows terakhir: {r.get('count',0) if r else '?'}")
     return False
 
+def detail_opened(driver, kode, before_tab_count):
+    """Quick check apakah detail kebuka. Return string label or None."""
+    try:
+        switch_top(driver)
+        if driver.execute_script(JS_DETAIL_OPEN, kode): return "DETAIL_INPUT"
+        tab_count = driver.execute_script(
+            "return document.querySelectorAll('[class*=\"aol-main-tab\"]').length;") or 0
+        if tab_count > before_tab_count: return "NEW_INTERNAL_TAB"
+    except: pass
+    return None
+
 def click_row_with_kode(driver, fr, kode):
-    """Buka detail via DOUBLE-CLICK cell Nomor. Beberapa strategi fallback."""
+    """Buka detail — coba 6 strategi, cek kebuka tiap strategi (jangan percaya 'no exception')."""
+    switch_top(driver)
+    before_tabs = driver.execute_script(
+        "return document.querySelectorAll('[class*=\"aol-main-tab\"]').length;") or 0
+    before_handles = len(driver.window_handles)
+
+    # Re-mark + dump cell info buat verifikasi
     reframe(driver, fr)
-    # Re-mark row + cell (search_kode sudah mark, tapi mungkin DOM re-render)
     driver.execute_script(JS_FIND_ROW_WITH_KODE, kode)
-    # Strategi 1: double-click cell Nomor (cell dengan data-fl-target=2)
-    cell = find_marked_attr(driver, "2", timeout=3)
-    if cell:
-        say("  [a] Coba DOUBLE-CLICK cell Nomor via ActionChains...")
+    cell_info = driver.execute_script("""
+        var cell = document.querySelector('[data-fl-target="2"]');
+        var row = document.querySelector('[data-fl-target="1"]');
+        return {
+            cellText: cell ? (cell.innerText||'').trim().slice(0,60) : '(no cell)',
+            cellHTML: cell ? (cell.innerHTML||'').slice(0,250) : '(no cell)',
+            rowText: row ? (row.innerText||'').trim().slice(0,80) : '(no row)'
+        };
+    """)
+    say(f"  Cell text     : {cell_info.get('cellText','?')}")
+    say(f"  Cell innerHTML: {cell_info.get('cellHTML','?')[:200]}")
+    say(f"  Row text      : {cell_info.get('rowText','?')[:70]}")
+    say(f"  Baseline: internal_tabs={before_tabs}, browser_tabs={before_handles}")
+
+    def try_strategy(label, desc, get_target, click_fn):
+        say(f"  [{label}] {desc}...")
         try:
-            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", cell)
-            ActionChains(driver).move_to_element(cell).double_click().perform()
-            return "DBLCLICK_CELL"
+            reframe(driver, fr)
+            driver.execute_script(JS_FIND_ROW_WITH_KODE, kode)
+            target = get_target()
+            if not target:
+                say(f"      [skip] target hilang/stale"); return None
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", target)
+            click_fn(target)
+            say(f"      [terkirim tanpa error]")
         except Exception as e:
-            say(f"  [a] gagal: {e}")
-    # Strategi 2: JS clickSeq (full pointer sequence) pada cell
-    if cell:
-        say("  [b] Coba JS clickSeq pada cell Nomor...")
-        try:
-            driver.execute_script(JS_CLICK_SEQ, cell)
-            return "JS_CLICKSEQ_CELL"
-        except Exception as e:
-            say(f"  [b] gagal: {e}")
-    # Strategi 3: double-click row (fallback kalau cell nggak ada)
-    row = find_marked_attr(driver, "1", timeout=2)
-    if row:
-        say("  [c] Coba DOUBLE-CLICK row via ActionChains...")
-        try:
-            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", row)
-            ActionChains(driver).move_to_element(row).double_click().perform()
-            return "DBLCLICK_ROW"
-        except Exception as e:
-            say(f"  [c] gagal: {e}")
-        # Strategi 4: single click row (last resort)
-        say("  [d] Coba single click row (last resort)...")
-        try:
-            ActionChains(driver).move_to_element(row).click().perform()
-            return "CLICK_ROW"
-        except Exception as e:
-            say(f"  [d] gagal: {e}")
+            say(f"      [gagal exception: {e}]"); return None
+        time.sleep(3)
+        switch_top(driver)
+        # Cek new browser tab
+        if len(driver.window_handles) > before_handles:
+            driver.switch_to.window(driver.window_handles[-1])
+            say(f"      [OK] Tab browser baru terbuka!")
+            return f"{label}_NEW_BROWSER_TAB"
+        opened = detail_opened(driver, kode, before_tabs)
+        if opened:
+            say(f"      [OK] Detail kebuka via {opened}")
+            return f"{label}_{opened}"
+        say(f"      [~] belum kebuka, coba strategi berikutnya")
+        return None
+
+    # a: double-click cell (ActionChains)
+    r = try_strategy("a", "DOUBLE-CLICK cell Nomor (ActionChains)",
+        lambda: find_marked_attr(driver, "2", timeout=2),
+        lambda t: ActionChains(driver).move_to_element(t).double_click().perform())
+    if r: return r
+    # b: JS clickSeq pada cell (full pointer events)
+    r = try_strategy("b", "JS clickSeq (pointerdown+mousedown+mouseup+click+dblclick) cell",
+        lambda: find_marked_attr(driver, "2", timeout=2),
+        lambda t: driver.execute_script(JS_CLICK_SEQ, t))
+    if r: return r
+    # c: element.click() pada cell (single JS click — bisa trigger Accurate's onClick)
+    r = try_strategy("c", "element.click() single pada cell (JS)",
+        lambda: find_marked_attr(driver, "2", timeout=2),
+        lambda t: driver.execute_script("arguments[0].click();", t))
+    if r: return r
+    # d: double-click row (ActionChains)
+    r = try_strategy("d", "DOUBLE-CLICK row (ActionChains)",
+        lambda: find_marked_attr(driver, "1", timeout=2),
+        lambda t: ActionChains(driver).move_to_element(t).double_click().perform())
+    if r: return r
+    # e: single click row (ActionChains)
+    r = try_strategy("e", "single click row (ActionChains)",
+        lambda: find_marked_attr(driver, "1", timeout=2),
+        lambda t: ActionChains(driver).move_to_element(t).click().perform())
+    if r: return r
+    # f: click inner <a>/<span onclick> link di dalam cell (nomor mungkin hyperlink)
+    def get_inner_link():
+        driver.execute_script("""
+            var c=document.querySelector('[data-fl-target="2"]');
+            if(!c) return;
+            var a=c.querySelector('a,span[onclick],[onclick],.slick-cell-text');
+            if(a){a.setAttribute('data-fl-target','3');}
+        """)
+        return find_marked_attr(driver, "3", timeout=2)
+    r = try_strategy("f", "click <a>/<span onclick> di dalam cell Nomor",
+        get_inner_link,
+        lambda t: ActionChains(driver).move_to_element(t).click().perform())
+    if r: return r
+    say("  [FAIL] Semua 6 strategi gagal buka detail.")
     return None
 
 # ============================================================
