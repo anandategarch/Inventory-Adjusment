@@ -550,42 +550,76 @@ def dump_detail_state(driver, kode):
     for i, k in enumerate(kodeEls):
         say(f'    [{i}] <{k["tag"]}> text="{k["text"]}" class="{k["class"]}"')
 
-def find_dokumen_button(driver):
-    """Cari tombol Dokumen/Komentar di detail view. Cari by text AND by icon."""
-    switch_top(driver)
-    # 1. Cari by text (Indonesia + English)
-    for txt in DOKUMEN_TEXTS + ["Comment", "Document", "Attachment", "Files", "Berkas"]:
-        ux = driver.execute_script(JS_FIND_MARK, txt, False)
-        if ux:
-            return ux, f"text:{txt}"
-    # 2. Cari by icon class (Accurate pakai Metro UI: mif-doc, mif-attachment, dll)
-    JS_FIND_BY_ICON = JS_VIS + """
+JS_FIND_DOKUMEN_TAB = JS_VIS + """
 return (function(){
   var ATTR='data-fl-target';
-  var RE = /mif-doc|mif-attachment|mif-files|mif-comment|icon-doc|icon-attachment|icon-comment|icon-files|fa-paperclip|fa-file/i;
-  function scan(doc, path){
-    var els = doc.querySelectorAll('button, a, span, i, [role="button"]');
-    for (var el of els){
-      if (!vis(el)) continue;
-      var cls = (el.className||'').toString();
-      if (RE.test(cls)){
-        var target = el.closest('button,a,[role="button"]') || el;
-        target.setAttribute(ATTR,'1');
-        return {path:path, text:(target.innerText||'').slice(0,60), html:(target.outerHTML||'').slice(0,400), icon:cls.slice(0,60)};
-      }
+  var links = document.querySelectorAll('a, li');
+  for (var i=0;i<links.length;i++){
+    var el = links[i];
+    if (!vis(el)) continue;
+    var t = (el.innerText||'').trim();
+    if (!t || t.length > 30) continue;
+    var up = t.toUpperCase();
+    // Cari "Dokumen" tapi EXCLUDE "Memiliki dokumen" (checkbox label)
+    if (up.indexOf('DOKUMEN') !== -1 && up.indexOf('MEMILIKI') === -1){
+      el.setAttribute(ATTR,'1');
+      return {path:[], text:t.slice(0,30), html:(el.outerHTML||'').slice(0,300)};
     }
-    var fr = doc.querySelectorAll('iframe, frame');
-    for (var i=0;i<fr.length;i++){ try{var d=fr[i].contentDocument; if(!d)continue; var r=scan(d,path.concat([i])); if(r)return r;}catch(e){} }
-    return null;
   }
-  return scan(document, []);
+  return null;
 })();
 """
+
+def find_dokumen_tab(driver):
+    """Cari tab 'Dokumen' (bukan 'Memiliki dokumen'). Return (ux, label)."""
+    switch_top(driver)
     try:
-        ux = driver.execute_script(JS_FIND_BY_ICON)
-        if ux: return ux, f"icon:{ux.get('icon','?')}"
-    except: pass
+        ux = driver.execute_script(JS_FIND_DOKUMEN_TAB)
+        if ux: return ux, "dokumen-tab"
+    except Exception as e:
+        say(f"  [ERR] find_dokumen_tab: {e}")
     return None, None
+
+def find_download_button_by_name(driver, names):
+    """Cari button by name attribute (paling reliable). Return (element, name).
+    Prefer visible; kalau semua hidden, ambil yg pertama (JS click bisa trigger hidden)."""
+    switch_top(driver)
+    for name in names:
+        try:
+            btns = driver.find_elements(By.CSS_SELECTOR, f'button[name="{name}"]')
+            if not btns: continue
+            # Prefer visible
+            for btn in btns:
+                try:
+                    if btn.is_displayed(): return btn, name
+                except: continue
+            # Fallback: ambil pertama (akan di-JS click)
+            return btns[0], name
+        except: continue
+    return None, None
+
+def click_dokumen_tab_and_find_download(driver):
+    """Klik tab Dokumen, tunggu, cari tombol download by name. Return (btn, name) or (None, None)."""
+    say('\n  Mencari tab "Dokumen"...')
+    ux, via = find_dokumen_tab(driver)
+    if not ux:
+        say('  [WARNING] Tab "Dokumen" tidak ditemukan (exclude "Memiliki").')
+        say('  Coba langsung cari tombol download by name (mungkin sudah visible)...')
+    else:
+        say(f'  [OK] Tab Dokumen ditemukan: "{ux.get("text","?")}"')
+        el = find_marked(driver, ux["path"], timeout=5)
+        if el:
+            how = smart_click(driver, el)
+            say(f"  [OK] Tab Dokumen diklik via {how}. Tunggu panel...")
+            clear_mark(driver, ux["path"])
+            time.sleep(3)
+        else:
+            clear_mark(driver, ux["path"])
+            say("  [WARNING] Tab Dokumen tidak bisa di-klik. Lanjut cari download by name.")
+    # Cari tombol download by name (urutan preferensi)
+    say('  Mencari tombol download by name (btnExportPdf > btnExportXls > btnPrint)...')
+    btn, name = find_download_button_by_name(driver, ["btnExportPdf", "btnExportXls", "btnPrint"])
+    return btn, name
 
 def dump_dokumen_panel(driver):
     """Dump semua link/button relevan di panel dokumen (download/pdf/xls/unduh + nama file)."""
@@ -677,7 +711,7 @@ def close_detail_tab(driver, kode):
 # ============================================================
 def main():
     say("=" * 60)
-    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v2 TRIAL)")
+    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v7 TRIAL)")
     say("=" * 60)
     say(f"Folder download: {DOWNLOAD_DIR}")
     if not os.path.isdir(DOWNLOAD_DIR):
@@ -692,11 +726,11 @@ def main():
         say(f"[WARNING] Format kode tidak biasa: {kode} (tetap lanjut)")
     say(f"\nKode: {kode}")
 
-    say("\n[1/7] Connect Chrome port 9222...")
+    say("\n[1/8] Connect Chrome port 9222...")
     driver = connect_chrome()
     say(f"  [OK] Terhubung. Tab aktif: {driver.current_url}")
 
-    say("\n[2/7] Cari frame list...")
+    say("\n[2/8] Cari frame list...")
     fr = find_list_frame(driver, timeout=12)
     if not fr:
         say("  [ERROR] Frame list tidak ditemukan.")
@@ -704,14 +738,14 @@ def main():
         sys.exit(1)
     say(f"  [OK] Frame: {fr}")
 
-    say(f"\n[3/7] Search kode {kode} (via JS setVal)...")
+    say(f"\n[3/8] Search kode {kode} (via JS setVal)...")
     if not search_kode(driver, kode, fr):
         say("  [ERROR] Kode tidak ditemukan di grid setelah search.")
         say("  Kemungkinan: kode bukan transaksi tanggal hari ini (cek filter date),")
         say("  atau halaman list belum terbuka di tab aktif.")
         sys.exit(1)
 
-    say("\n[4/7] Klik baris (buka detail)...")
+    say("\n[4/8] Klik baris (buka detail)...")
     before_handles = driver.window_handles
     how = click_row_with_kode(driver, fr, kode)
     if not how:
@@ -729,66 +763,52 @@ def main():
         say("  atau detail kebuka tapi input nomor-nya bukan <input> (label/text doang).")
         say("  Lanjut tetap dump state + cari tombol Dokumen.")
 
-    say("\n[5/7] DUMP STATE HALAMAN (cari dimana tombol Dokumen)...")
+    say("\n[5/8] DUMP STATE HALAMAN (cari dimana tombol Dokumen)...")
     dump_detail_state(driver, kode)
 
-    say('\n[6/7] Cari tombol "Dokumen/Komentar" di detail...')
-    ux, found_via = find_dokumen_button(driver)
-    if not ux:
-        say('  [ERROR] Tombol Dokumen/Komentar tidak ditemukan via text/icon.')
-        say('')
-        say('  === PENTING ===')
-        say('  Kirim output bagian [5/7] DUMP STATE di atas ke saya.')
-        say('  Dari list buttons + elemen Dokumen/Komentar yg tercetak,')
-        say('  saya bisa tentukan selector tombol yg benar buat v4.')
+    say("\n[6/8] Klik tab Dokumen + cari tombol download by name...")
+    btn, dl_name = click_dokumen_tab_and_find_download(driver)
+    if not btn:
+        say('  [ERROR] Tombol download (btnExportPdf/btnExportXls/btnPrint) tidak ditemukan.')
+        say('  Kirim output [5/8] DUMP ke saya — dari list ALL BUTTONS saya lihat name tombol yg benar.')
         close_detail_tab(driver, kode)
         sys.exit(1)
-    say(f'  [OK] Ditemukan via {found_via}: "{ux.get("text","?")}"')
-    el = find_marked(driver, ux["path"], timeout=5)
-    if not el:
-        clear_mark(driver, ux["path"])
-        say("  [ERROR] Tombol Dokumen hilang sebelum diklik.")
-        sys.exit(1)
-    smart_click(driver, el); clear_mark(driver, ux["path"])
-    say("  [OK] Diklik. Tunggu panel dokumen muncul...")
-    time.sleep(3)
+    say(f'  [OK] Tombol download ditemukan: name="{dl_name}" text="{btn.text.strip()[:40]}"')
 
-    say("\n[7/8] Dump panel dokumen + cari link download...")
-    panel = dump_dokumen_panel(driver)
-    if not panel:
-        say("  [WARNING] Panel dokumen kosong / tidak ada link download yg terdeteksi.")
-        say("  Mungkin panel belum kebuka, atau butuh klik tab 'Dokumen' spesifik.")
-        say("  Saya tetap coba auto-download dari elemen apa pun yg ada.")
-    else:
-        say(f"  Ditemukan {len(panel)} elemen relevan:")
-        for item in panel:
-            say(f'    [{item["i"]}] <{item["tag"]}> text="{item["text"]}" href="{item["href"][:50]}" onclick="{item["onclick"][:40]}"')
-
-    say("\n[8/8] Coba auto-download...")
+    say(f"\n[7/8] Klik tombol {dl_name} + tunggu download (maks 90s)...")
     before = snapshot_downloads()
-    if try_click_download_in_panel(driver, panel):
-        say("  [..] Link download diklik, tunggu file (maks 60s)...")
-        fname = wait_new_download(before, timeout=60)
-        if fname:
-            final = os.path.join(DOWNLOAD_DIR, fname)
-            say(f"\n  [OK] File tersimpan: {final}")
+    # Coba ActionChains dulu, fallback JS click (bisa trigger hidden button)
+    how = None
+    try:
+        how = smart_click(driver, btn)
+        say(f"  [OK] Diklik via {how}")
+    except Exception as e:
+        say(f"  [WARNING] smart_click gagal: {e}, coba JS click...")
+    if not how or how == "GAGAL":
+        try:
+            driver.execute_script("arguments[0].click();", btn)
+            say("  [OK] JS click terkirim")
+        except Exception as e:
+            say(f"  [ERROR] JS click juga gagal: {e}")
             close_detail_tab(driver, kode)
-            say("\n" + "=" * 60)
-            say(f"  SELESAI! File: {fname}")
-            say(f"  Lokasi  : {final}")
-            say("=" * 60)
-            return
-        else:
-            say(f"  [ERROR] Download tidak selesai 60s. Cek manual: {DOWNLOAD_DIR}")
-    else:
-        say("  [FAIL] Tidak ada link download otomatis yg bisa diklik.")
-        say("")
-        say("  === PENTING ===")
-        say("  Kirim output ini (terutama bagian [6/7] dump) ke saya.")
-        say("  Dari situ saya bisa lihat selector link download SJ yg benar,")
-        say("  lalu update tool v3 buat auto-download.")
-    # tutup tab detail biar bersih
+            sys.exit(1)
+    say("  [..] Tunggu file tersimpan...")
+    fname = wait_new_download(before, timeout=90)
+    if not fname:
+        say(f"  [ERROR] Download tidak selesai 90s. Cek manual: {DOWNLOAD_DIR}")
+        say("  Mungkin tombol butuh panel dokumen aktif dulu, atau ada popup konfirmasi.")
+        close_detail_tab(driver, kode)
+        sys.exit(1)
+    final = os.path.join(DOWNLOAD_DIR, fname)
+    say(f"\n  [OK] File tersimpan: {final}")
+
+    say("\n[8/8] Tutup tab detail...")
     close_detail_tab(driver, kode)
+    say("\n" + "=" * 60)
+    say(f"  SELESAI! File: {fname}")
+    say(f"  Lokasi  : {final}")
+    say(f"  Kode    : {kode}")
+    say("=" * 60)
 
 if __name__ == "__main__":
     try:
