@@ -1,7 +1,14 @@
 """
-download_sj_gis.py  (v8 - FINAL)
+download_sj_gis.py  (v8.2 - FINAL)
 =================================
 Download Surat Jalan (SJ) dari modul PEMINDAHAN BARANG Accurate Online (database GiS).
+
+PERBAIKAN v8.2 (dari v8.1):
+  - CRITICAL FIX: STEP 2 (click cell) kembali pakai JS clickSeq (native MouseEvent dispatch)
+    sebagai PRIMARY method. v8/v8.1 regressed ke ActionChains.click() yg TIDAK trigger
+    SlickGrid onClick handler → detail nggak pernah kebuka → "btnCommentAttachment
+    tidak ditemukan". JS clickSeq PROVEN buka detail di v6 ("Detail kebuka via DETAIL_INPUT").
+    ActionChains hanya dipakai sebagai fallback terakhir.
 
 Flow (berdasarkan RECORDER recording user manual — selector PERSIS):
   1. Search kode di input[name=keyword] + click button.btn-search
@@ -265,6 +272,40 @@ return (function(nomor){
 """
 
 # ============================================================
+# JS CLICK SEQUENCES — native MouseEvent dispatch (PROVEN trigger SlickGrid onClick)
+# ============================================================
+# CRITICAL FIX v8.2: ActionChains.click() does NOT trigger SlickGrid's onClick handler
+# (which opens the item-transfer detail via AJAX detail-item-transfer.do). Only native
+# JS MouseEvent dispatch does. This was PROVEN in v6 (output: "Detail kebuka via DETAIL_INPUT").
+# v8/v8.1 regressed to ActionChains.click() → detail never opens → "btnCommentAttachment
+# tidak ditemukan". v8.2 restores the JS clickSeq approach as PRIMARY click method.
+#
+# Matches the manual recording: user single-clicked the cell (mousedown + click, no dblclick).
+
+# JS clickSeq — 5 single-click events (pointerdown+mousedown+pointerup+mouseup+click).
+# Matches recording exactly (user single-clicked cell, no dblclick). Triggers SlickGrid onClick.
+JS_CLICK_SEQ = """
+var el = arguments[0];
+var init = {bubbles:true, cancelable:true, view:window, button:0, buttons:1};
+['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(t){
+  try { el.dispatchEvent(new MouseEvent(t, init)); } catch(e){}
+});
+return 'OK';
+"""
+
+# v6 full clickSeq + dblclick (proven to work in v6). Backup kalau single-click clickSeq
+# alone does not trigger SlickGrid onClick for some reason.
+JS_CLICK_SEQ_DBL = """
+var el = arguments[0];
+var init = {bubbles:true, cancelable:true, view:window, button:0, buttons:1};
+['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(t){
+  try { el.dispatchEvent(new MouseEvent(t, init)); } catch(e){}
+});
+try { el.dispatchEvent(new MouseEvent('dblclick', init)); } catch(e){}
+return 'OK';
+"""
+
+# ============================================================
 # STEP 1: SEARCH (proven)
 # ============================================================
 JS_SET_KEYWORD = """
@@ -308,26 +349,103 @@ def search_kode(driver, kode, fr):
 # ============================================================
 # STEP 2: SINGLE-CLICK CELL → OPEN DETAIL (BUKAN double-click!)
 # ============================================================
+# CRITICAL FIX v8.2: gunakan JS clickSeq (native MouseEvent dispatch) sebagai PRIMARY method.
+# ActionChains.click() does NOT trigger SlickGrid's onClick handler — only native JS
+# MouseEvent dispatch does (proven in v6: "Detail kebuka via DETAIL_INPUT"). v8/v8.1
+# regressed to ActionChains.click() → detail never opens → "btnCommentAttachment tidak
+# ditemukan". v8.2 restores JS clickSeq as PRIMARY, ActionChains only as last-resort fallback.
 def click_cell_open_detail(driver, fr, kode):
-    """Single-click cell di row berisi kode → detail kebuka (AJAX detail-item-transfer.do)."""
-    reframe(driver, fr)
-    driver.execute_script(JS_FIND_ROW_WITH_KODE, kode)
-    cell = find_marked_attr(driver, "2", timeout=3)
+    """Single-click cell di row berisi kode → detail kebuka (AJAX detail-item-transfer.do).
+
+    Strategi (urutan, tiap strategi dicek pakai JS_DETAIL_OPEN max 4s):
+      1. JS clickSeq (pointerdown+mousedown+pointerup+mouseup+click) — PRIMARY, matches recording
+      2. JS clickSeq + dblclick (v6 approach, proven)
+      3. simple element.click() via JS
+      4. ActionChains double-click (fallback)
+      5. ActionChains single-click (fallback terakhir — least reliable for SlickGrid)
+    Return label strategi yg sukses, atau "JS_CLICK_SEQ_DISPATCHED" kalau semua gagal
+    (click tetap di-dispatch — detail-check mungkin flaky; caller ada wait_detail_open 15s).
+    """
+    def find_cell():
+        """Re-mark + cari cell (data-fl-target=2). Fallback ke row (data-fl-target=1)."""
+        reframe(driver, fr)
+        driver.execute_script(JS_FIND_ROW_WITH_KODE, kode)
+        c = find_marked_attr(driver, "2", timeout=2)
+        if not c:
+            c = find_marked_attr(driver, "1", timeout=2)
+        return c
+
+    cell = find_cell()
     if not cell:
-        say("    [WARNING] Cell Nomor tidak ditemukan, coba row...")
-        cell = find_marked_attr(driver, "1", timeout=2)
-    if not cell:
+        say("    [WARNING] Cell/row tidak ditemukan setelah search.")
         return None
-    try:
-        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", cell)
-        ActionChains(driver).move_to_element(cell).click().perform()
-        return "SINGLE_CLICK_CELL"
-    except Exception as e:
-        try:
-            driver.execute_script("arguments[0].click();", cell)
-            return "JS_CLICK_CELL"
-        except:
+
+    def try_strategy(label, click_fn):
+        """Coba 1 strategi click, cek detail kebuka dalam 4s. Return label kalau sukses, None kalau gagal."""
+        c = find_cell()  # re-find (mungkin stale setelah strategi sebelumnya)
+        if not c:
+            say(f"    [{label}] cell hilang/stale")
             return None
+        try:
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", c)
+        except: pass
+        try:
+            click_fn(c)
+        except Exception as e:
+            say(f"    [{label}] exception: {e}")
+            return None
+        # Tunggu AJAX detail-item-transfer.do (max 4s per strategi)
+        end = time.time() + 4
+        while time.time() < end:
+            try:
+                switch_top(driver)
+                if driver.execute_script(JS_DETAIL_OPEN, kode):
+                    return label
+            except: pass
+            time.sleep(0.3)
+        return None
+
+    # 1. PRIMARY: JS clickSeq (native MouseEvent — pointerdown+mousedown+pointerup+mouseup+click)
+    #    Matches recording (user single-clicked cell). PROVEN trigger SlickGrid onClick.
+    say("    [1] JS clickSeq (native MouseEvent dispatch)...")
+    r = try_strategy("JS_CLICK_SEQ", lambda t: driver.execute_script(JS_CLICK_SEQ, t))
+    if r:
+        say(f"    [OK] Detail kebuka via {r}")
+        return r
+
+    # 2. FALLBACK: v6 full clickSeq + dblclick (proven to work in v6)
+    say("    [2] JS clickSeq + dblclick (v6 approach)...")
+    r = try_strategy("JS_CLICK_SEQ_DBL", lambda t: driver.execute_script(JS_CLICK_SEQ_DBL, t))
+    if r:
+        say(f"    [OK] Detail kebuka via {r}")
+        return r
+
+    # 3. FALLBACK: simple element.click() via JS
+    say("    [3] element.click() via JS...")
+    r = try_strategy("JS_CLICK", lambda t: driver.execute_script("arguments[0].click();", t))
+    if r:
+        say(f"    [OK] Detail kebuka via {r}")
+        return r
+
+    # 4. FALLBACK: ActionChains double-click
+    say("    [4] ActionChains double-click...")
+    r = try_strategy("AC_DBLCLICK", lambda t: ActionChains(driver).move_to_element(t).double_click().perform())
+    if r:
+        say(f"    [OK] Detail kebuka via {r}")
+        return r
+
+    # 5. FALLBACK (terakhir): ActionChains single-click — least reliable for SlickGrid
+    say("    [5] ActionChains single-click...")
+    r = try_strategy("AC_CLICK", lambda t: ActionChains(driver).move_to_element(t).click().perform())
+    if r:
+        say(f"    [OK] Detail kebuka via {r}")
+        return r
+
+    say("    [WARNING] Semua strategi click gagal buka detail (per JS_DETAIL_OPEN).")
+    say("    [INFO] Click dispatched via JS clickSeq. Lanjut — wait_detail_open(15s) di caller.")
+    # Kembalikan label primary — process_one_kode akan panggil wait_detail_open(15s) buat
+    # pastika detail benar-benar kebuka (mungkin JS_DETAIL_OPEN marker belum sempat render).
+    return "JS_CLICK_SEQ_DISPATCHED"
 
 def wait_detail_open(driver, kode, timeout=15):
     end = time.time() + timeout
@@ -708,7 +826,7 @@ def process_one_kode(driver, kode, fr, seq, total):
 
 def main():
     say("=" * 60)
-    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.1 FINAL)")
+    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.2 FINAL)")
     say("=" * 60)
     say(f"Folder download: {DOWNLOAD_DIR}")
     if not os.path.isdir(DOWNLOAD_DIR):

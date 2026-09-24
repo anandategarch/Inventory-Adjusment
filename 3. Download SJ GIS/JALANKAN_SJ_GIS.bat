@@ -1,11 +1,11 @@
 @echo off
 setlocal
 chcp 65001 >nul
-title Download SJ GIS - Pemindahan Barang (FINAL v8.1)
+title Download SJ GIS - Pemindahan Barang (FINAL v8.2)
 color 0A
 cls
 echo ============================================================
-echo   DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.1 FINAL)
+echo   DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.2 FINAL)
 echo ============================================================
 echo.
 echo  Alur (berdasarkan recording manual user):
