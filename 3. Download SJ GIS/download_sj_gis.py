@@ -420,9 +420,10 @@ def main():
         say(f"[ERROR] Folder Downloads tidak ditemukan: {DOWNLOAD_DIR}")
         sys.exit(1)
 
-    kode = input("\nMasukkan kode SJ (mis. IT.2026.09.19805): ").strip()
+    kode = input("\nMasukkan kode SJ (default: IT.2026.09.19805, atau ketik kode lain): ").strip()
     if not kode:
-        say("Kode kosong. Keluar."); sys.exit(1)
+        kode = "IT.2026.09.19805"
+        say("  [INFO] Kode kosong -> pakai default: IT.2026.09.19805")
     if not KODE_RE.match(kode):
         say(f"[WARNING] Format kode tidak biasa: {kode} (tetap lanjut)")
     say(f"\nKode: {kode}")
