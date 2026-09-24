@@ -265,12 +265,45 @@ return (function(kode){
     var t = rows[i].innerText || '';
     if (t.indexOf(kode) !== -1){
       rows[i].setAttribute('data-fl-target','1');
-      return {found:true, text:t.slice(0,80), path:[]};
+      var cells = rows[i].querySelectorAll('.slick-cell');
+      var cellMarked = false;
+      for (var j=0;j<cells.length;j++){
+        var ct = (cells[j].innerText||'').trim();
+        if (ct.indexOf(kode) !== -1){
+          cells[j].setAttribute('data-fl-target','2');
+          cellMarked = true;
+          break;
+        }
+      }
+      return {found:true, text:t.slice(0,80), path:[], cellMarked:cellMarked, cellCount:cells.length};
     }
   }
   return {found:false, count:rows.length};
 })(arguments[0]);
 """
+
+JS_CLICK_SEQ = """
+var el = arguments[0];
+var init = {bubbles:true, cancelable:true, view:window, button:0, buttons:1};
+['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(t){
+  try { el.dispatchEvent(new MouseEvent(t, init)); } catch(e){}
+});
+try { el.dispatchEvent(new MouseEvent('dblclick', init)); } catch(e){}
+"""
+
+def find_marked_attr(driver, attr_val, timeout=3):
+    """Cari element dengan data-fl-target = attr_val (1=row, 2=cell)."""
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            els = driver.find_elements(By.CSS_SELECTOR, f'[data-fl-target="{attr_val}"]')
+            for el in els:
+                try:
+                    if el.is_displayed(): return el
+                except: continue
+        except: pass
+        time.sleep(0.2)
+    return None
 
 def search_kode(driver, kode, fr):
     """Ketik kode via JS setVal + klik btn-search via JS. Return True kalau row muncul."""
@@ -302,10 +335,45 @@ def search_kode(driver, kode, fr):
     return False
 
 def click_row_with_kode(driver, fr, kode):
+    """Buka detail via DOUBLE-CLICK cell Nomor. Beberapa strategi fallback."""
     reframe(driver, fr)
-    el = find_marked(driver, [], timeout=2)
-    if el:
-        return smart_click(driver, el)
+    # Re-mark row + cell (search_kode sudah mark, tapi mungkin DOM re-render)
+    driver.execute_script(JS_FIND_ROW_WITH_KODE, kode)
+    # Strategi 1: double-click cell Nomor (cell dengan data-fl-target=2)
+    cell = find_marked_attr(driver, "2", timeout=3)
+    if cell:
+        say("  [a] Coba DOUBLE-CLICK cell Nomor via ActionChains...")
+        try:
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", cell)
+            ActionChains(driver).move_to_element(cell).double_click().perform()
+            return "DBLCLICK_CELL"
+        except Exception as e:
+            say(f"  [a] gagal: {e}")
+    # Strategi 2: JS clickSeq (full pointer sequence) pada cell
+    if cell:
+        say("  [b] Coba JS clickSeq pada cell Nomor...")
+        try:
+            driver.execute_script(JS_CLICK_SEQ, cell)
+            return "JS_CLICKSEQ_CELL"
+        except Exception as e:
+            say(f"  [b] gagal: {e}")
+    # Strategi 3: double-click row (fallback kalau cell nggak ada)
+    row = find_marked_attr(driver, "1", timeout=2)
+    if row:
+        say("  [c] Coba DOUBLE-CLICK row via ActionChains...")
+        try:
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", row)
+            ActionChains(driver).move_to_element(row).double_click().perform()
+            return "DBLCLICK_ROW"
+        except Exception as e:
+            say(f"  [c] gagal: {e}")
+        # Strategi 4: single click row (last resort)
+        say("  [d] Coba single click row (last resort)...")
+        try:
+            ActionChains(driver).move_to_element(row).click().perform()
+            return "CLICK_ROW"
+        except Exception as e:
+            say(f"  [d] gagal: {e}")
     return None
 
 # ============================================================
