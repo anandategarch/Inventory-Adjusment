@@ -1,22 +1,23 @@
 @echo off
 setlocal
 chcp 65001 >nul
-title Download SJ GIS - Pemindahan Barang (TRIAL v7)
+title Download SJ GIS - Pemindahan Barang (FINAL v8)
 color 0A
 cls
 echo ============================================================
-echo   DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v7 TRIAL)
+echo   DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8 FINAL)
 echo ============================================================
 echo.
-echo  Alur: search kode ^> klik baris ^> buka detail ^> klik tombol
-echo  "Dokumen/Komentar" ^> cari link download SJ ^> unduh file.
+echo  Alur (berdasarkan recording manual user):
+echo    search ^> klik cell ^> detail ^> btnCommentAttachment
+echo    ^> dropdown ^> attachment panel ^> icon-download-2 ^> file
 echo.
 echo  Prasyarat (PASTIKAN sebelum tekan ENTER):
 echo   1. Chrome debugging SUDAH terbuka (port 9222)
 echo   2. SUDAH login Accurate Online
 echo   3. Halaman LIST Pemindahan Barang SUDAH terbuka
 echo.
-echo  Output: file PDF/XLS tersimpan di folder Downloads.
+echo  Output: file PDF/XLS di folder Downloads (1 per kode).
 echo.
 echo  ----------------------------------------------------------
 echo  Tekan ENTER untuk mulai...
@@ -33,8 +34,10 @@ if errorlevel 1 (
 )
 echo [2/2] Menjalankan tool...
 echo.
-echo  ^> Saat ditanya "Masukkan kode SJ", TEKAN ENTER saja buat pakai
-echo    default IT.2026.09.19805, atau ketik kode lain lalu ENTER.
+echo  ^> Saat ditanya "Masukkan kode SJ", ketik 1 kode, ATAU
+echo    multi-kode dipisah koma. Lalu ENTER.
+echo    Contoh: IT.2026.09.19805
+echo    Contoh: IT.2026.09.19805, IT.2026.09.20451, IT.2026.09.20447
 echo.
 python "%~dp0download_sj_gis.py"
 if errorlevel 1 (
