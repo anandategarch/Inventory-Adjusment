@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Selenium / browser profiles
+ChromeDebugProfile/
+*.log
+
+# Excel temp/lock files
+~$*.xlsx
+~$*.xls
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
