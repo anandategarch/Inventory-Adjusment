@@ -1,21 +1,23 @@
 """
-download_sj_gis.py  (v1 - TRIAL)
-=================================
+download_sj_gis.py  (v2 - TRIAL)
+==================================
 Download Surat Jalan (SJ) dari modul PEMINDAHAN BARANG Accurate Online (database GiS).
-Alur: search kode -> klik baris (buka detail) -> cetak (Ctrl+P) -> unduh dari overlay.
 
-Helper & pola di-REUSE dari tool "Download Draft IA" (unduh_xls_loop.py) yang sudah
-terbukti jalan: connect_chrome, find_list_frame, smart_click, JS_FIND_MARK, JS_FIND_PRINT,
-trigger_print_and_wait, wait_new_download, close_report, close_detail_tab.
+PERBAIKAN v2 (dari feedback user):
+  1. Search pakai JS setVal (native setter + dispatch input/change/keyup) — BUKAN Selenium
+     send_keys yang nggak dikenalin framework Accurate. (Fix "kode tidak keluar".)
+  2. Flow download BUKAN Ctrl+P. Tombolnya = "Komentar dan Dokumen" di halaman detail.
+     Alur: search -> klik baris -> buka detail -> klik tombol Dokumen/Komentar ->
+     panel dokumen muncul -> cari link download SJ -> klik -> file tersimpan.
 
 Cara pakai:
-  1. Buka Chrome dengan remote debugging:
-       chrome.exe --remote-debugging-port=9222 --user-data-dir="C:\\ChromeDebugProfile" "https://accurate.id"
+  1. Buka Chrome: chrome.exe --remote-debugging-port=9222 --user-data-dir="C:\\ChromeDebugProfile" "https://accurate.id"
   2. Login Accurate, buka modul PEMINDAHAN BARANG (halaman LIST/tabel).
   3. python download_sj_gis.py  (atau double-click JALANKAN_SJ_GIS.bat)
   4. Masukkan kode SJ (mis. IT.2026.09.19805).
 
 Output: file PDF/XLS tersimpan di folder Downloads.
+Kalau auto-download gagal, tool cetak DUMP panel dokumen — kirim ke saya buat fix selector.
 """
 import os
 import sys
@@ -40,16 +42,17 @@ DEBUG_PORT = 9222
 DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads")
 KODE_RE = re.compile(r"IT\.\d{4}\.\d{2}\.\d+")
 
-# Tombol unduh di overlay: dicari dengan match "contains" (Unduh PDF / Unduh XLS / Unduh / dst)
-UNDUH_TEXTS = ["Unduh", "Download", "Cetak PDF", "Simpan"]
-# Ekstensi file hasil download yang diakui
-DL_EXTS = (".pdf", ".xls", ".xlsx")
+# Tombol Dokumen/Komentar di detail view (dicari contains match)
+DOKUMEN_TEXTS = ["Dokumen", "Komentar", "Lampiran", "Attachment", "Dokumen & Komentar", "Komentar & Dokumen"]
+# Tombol/link unduh di panel dokumen
+UNDUH_TEXTS = ["Unduh", "Download", "Cetak", "Simpan", "PDF", "XLS"]
+DL_EXTS = (".pdf", ".xls", ".xlsx", ".doc", ".docx", ".png", ".jpg", ".jpeg")
 
 def say(msg):
     print(msg); sys.stdout.flush()
 
 # ============================================================
-# CHROME CONNECTION (sama kayak tool 1 & 2)
+# CHROME CONNECTION
 # ============================================================
 def connect_chrome():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -67,7 +70,6 @@ def switch_top(driver):
     except: pass
 
 def find_list_frame(driver, timeout=12):
-    """Cari iframe yg berisi grid SlickGrid / search box keyword."""
     end = time.time() + timeout
     SEL = ".slick-viewport, .slick-row, input[name='keyword']"
     while time.time() < end:
@@ -98,9 +100,6 @@ def switch_path(driver, path):
         else: return False
     return True
 
-# ============================================================
-# SMART CLICK (proven — Selenium ActionChains = trusted event)
-# ============================================================
 def smart_click(driver, el, retries=3):
     for _ in range(retries):
         try:
@@ -116,7 +115,7 @@ def smart_click(driver, el, retries=3):
     except: return "GAGAL"
 
 # ============================================================
-# JS HELPERS (reuse dari tool 1 — terbukti jalan dengan Accurate)
+# JS HELPERS
 # ============================================================
 JS_VIS = """
 function vis(el){
@@ -131,13 +130,12 @@ function vis(el){
 }
 """
 
-# Cari elemen by text (contains) lintas semua frame, tandai dengan data-fl-target
 JS_FIND_MARK = JS_VIS + """
 return (function(txt, exact){
   const ATTR='data-fl-target';
   const up = txt.toUpperCase();
   function scan(doc, path){
-    const els = doc.querySelectorAll('button, a, span, div, li, label, input[type="button"]');
+    const els = doc.querySelectorAll('button, a, span, div, li, label, input[type="button"], i, svg');
     for (const el of els){
       if (!vis(el)) continue;
       const t = (el.innerText||el.textContent||'').trim();
@@ -159,37 +157,6 @@ return (function(txt, exact){
 })(arguments[0], arguments[1])
 """
 
-# Cari tombol Cetak (text "CETAK" atau icon print)
-JS_FIND_PRINT = JS_VIS + """
-return (function(){
-  const ATTR='data-fl-target';
-  function scan(doc, path){
-    const cands = doc.querySelectorAll('button, a, span, div');
-    for (const el of cands){
-      if (!vis(el)) continue;
-      const ti = (el.getAttribute('title')||'').toUpperCase();
-      const txt = (el.innerText||'').trim().toUpperCase();
-      const cls = (el.className||'').toUpperCase();
-      const hasPrintIcon = !!el.querySelector('i[class*="print"], [class*="print"], .icon-print');
-      const isPrintBtn = ti.includes('CETAK') || txt==='CETAK' || txt.includes('CETAK') ||
-                         (hasPrintIcon && (txt==='' || txt.length < 20)) ||
-                         cls.includes('PRINT');
-      if (isPrintBtn && (el.tagName==='BUTTON' || el.tagName==='A' || el.getAttribute('onclick'))){
-        el.setAttribute(ATTR,'1');
-        return {path:path, text:(el.innerText||el.getAttribute('title')||'').slice(0,60), html:(el.outerHTML||'').slice(0,400)};
-      }
-    }
-    const fr = doc.querySelectorAll('iframe, frame');
-    for (let i=0;i<fr.length;i++){
-      try{ const d=fr[i].contentDocument; if(!d) continue; const r=scan(d, path.concat([i])); if(r) return r; }catch(e){}
-    }
-    return null;
-  }
-  return scan(document, []);
-})()
-"""
-
-# Cek apakah detail form sudah kebuka (ada input dengan value = kode)
 JS_DETAIL_OPEN = JS_VIS + """
 return (function(nomor){
   function scan(doc){
@@ -203,7 +170,6 @@ return (function(nomor){
 })(arguments[0])
 """
 
-# Cari tombol close (×) pada tab detail
 JS_MARK_CLOSE = JS_VIS + """
 return (function(nomor){
   const ATTR='data-fl-target';
@@ -257,57 +223,86 @@ def clear_mark(driver, path):
     except: pass
 
 # ============================================================
-# SEARCH BY KODE (proven dari deteksi: input[name=keyword] + btn-search)
+# SEARCH BY KODE — FIX: pakai JS setVal (proven dari deteksi)
 # ============================================================
+JS_SET_KEYWORD = """
+return (function(kode){
+  var el = document.querySelector("input[name='keyword']") || document.querySelector("input[type='text']");
+  if (!el) return {ok:false, msg:'NO_INPUT'};
+  el.focus(); el.click();
+  try {
+    var proto = Object.getPrototypeOf(el);
+    var desc = Object.getOwnPropertyDescriptor(proto, 'value') || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+    if (desc && desc.set) desc.set.call(el, kode); else el.value = kode;
+  } catch(e) { el.value = kode; }
+  el.dispatchEvent(new Event('input', {bubbles:true}));
+  el.dispatchEvent(new Event('change', {bubbles:true}));
+  el.dispatchEvent(new Event('keyup', {bubbles:true}));
+  return {ok:true, value: el.value};
+})(arguments[0]);
+"""
+
+JS_CLICK_BTN_SEARCH = """
+return (function(){
+  var b = document.querySelector("button.btn-search");
+  if (!b) return 'NO_BTN';
+  b.click();
+  return 'OK';
+})();
+"""
+
+JS_FIND_ROW_WITH_KODE = """
+return (function(kode){
+  var rows = document.querySelectorAll(".slick-row");
+  for (var i=0;i<rows.length;i++){
+    var t = rows[i].innerText || '';
+    if (t.indexOf(kode) !== -1){
+      rows[i].setAttribute('data-fl-target','1');
+      return {found:true, text:t.slice(0,80), path:[]};
+    }
+  }
+  return {found:false, count:rows.length};
+})(arguments[0]);
+"""
+
 def search_kode(driver, kode, fr):
-    """Ketik kode di search box + klik btn-search. Return True kalau row kode muncul."""
+    """Ketik kode via JS setVal + klik btn-search via JS. Return True kalau row muncul."""
     reframe(driver, fr)
-    inps = driver.find_elements(By.CSS_SELECTOR, "input[name='keyword']")
-    if not inps:
-        inps = driver.find_elements(By.CSS_SELECTOR, "input[type='text']")
-    if not inps:
-        say("  [ERROR] Search box tidak ditemukan.")
+    res = driver.execute_script(JS_SET_KEYWORD, kode)
+    if not res or not res.get("ok"):
+        say(f"  [ERROR] Search box tidak ditemukan: {res}")
         return False
-    el = inps[0]
-    try:
-        el.clear()
-        el.send_keys(kode)
-        time.sleep(0.3)
-    except Exception as e:
-        say(f"  [ERROR] gagal ketik: {e}")
-        return False
-    # Klik btn-search (lebih reliable dari Enter sintetik)
-    btns = driver.find_elements(By.CSS_SELECTOR, "button.btn-search")
-    if btns:
-        try: smart_click(driver, btns[0]); say("  [OK] btn-search diklik")
+    say(f"  [OK] Keyword diset via JS: value={res.get('value','')}")
+    time.sleep(0.3)
+    click_res = driver.execute_script(JS_CLICK_BTN_SEARCH)
+    say(f"  [OK] btn-search diklik via JS: {click_res}")
+    if click_res == "NO_BTN":
+        say("  [WARNING] btn-search tidak ada, coba Enter key fallback...")
+        try:
+            inps = driver.find_elements(By.CSS_SELECTOR, "input[name='keyword']")
+            if inps: inps[0].send_keys(Keys.RETURN)
         except: pass
-    else:
-        try: el.send_keys(Keys.RETURN)
-        except: pass
-    # Tunggu row kode muncul (polling 10s)
-    end = time.time() + 10
+    # Polling row kode muncul (12s)
+    end = time.time() + 12
     while time.time() < end:
         reframe(driver, fr)
-        for r in driver.find_elements(By.CSS_SELECTOR, ".slick-row"):
-            try:
-                txt = r.get_attribute("innerText") or r.text or ""
-                if kode in txt: return True
-            except: continue
+        r = driver.execute_script(JS_FIND_ROW_WITH_KODE, kode)
+        if r and r.get("found"):
+            say(f"  [OK] Kode ditemukan di grid: {r.get('text','')[:60]}")
+            return True
         time.sleep(0.5)
+    say(f"  [FAIL] Kode tidak muncul dalam 12s. Grid rows terakhir: {r.get('count',0) if r else '?'}")
     return False
 
-def find_row_with_kode(driver, fr, kode):
+def click_row_with_kode(driver, fr, kode):
     reframe(driver, fr)
-    for r in driver.find_elements(By.CSS_SELECTOR, ".slick-row"):
-        try:
-            if not r.is_displayed(): continue
-            txt = r.get_attribute("innerText") or r.text or ""
-            if kode in txt: return r
-        except: continue
+    el = find_marked(driver, [], timeout=2)
+    if el:
+        return smart_click(driver, el)
     return None
 
 # ============================================================
-# DETAIL + PRINT + DOWNLOAD FLOW (proven dari tool 1)
+# DETAIL + DOKUMEN PANEL FLOW
 # ============================================================
 def wait_detail_open(driver, kode, timeout=15):
     end = time.time() + timeout
@@ -319,67 +314,72 @@ def wait_detail_open(driver, kode, timeout=15):
         time.sleep(0.3)
     return False
 
-def wait_report_overlay(driver, timeout=20):
-    """Tunggu overlay report muncul. Cari tombol unduh (match 'Unduh' -> Unduh PDF/XLS/dst)."""
-    end = time.time() + timeout
-    while time.time() < end:
-        try:
-            switch_top(driver)
-            for txt in UNDUH_TEXTS:
-                ux = driver.execute_script(JS_FIND_MARK, txt, False)
-                if ux: return ux
-        except: pass
-        time.sleep(0.3)
+def find_dokumen_button(driver):
+    """Cari tombol Dokumen/Komentar/Lampiran di detail view."""
+    switch_top(driver)
+    for txt in DOKUMEN_TEXTS:
+        ux = driver.execute_script(JS_FIND_MARK, txt, False)
+        if ux:
+            return ux
     return None
 
-def trigger_print_and_wait(driver):
-    """Ctrl+P dulu, fallback klik tombol Cetak."""
-    try: ActionChains(driver).send_keys(Keys.ESCAPE).perform()
-    except: pass
-    time.sleep(0.1)
-    # Focus form biar Ctrl+P kena halaman detail
+def dump_dokumen_panel(driver):
+    """Dump semua link/button relevan di panel dokumen (download/pdf/xls/unduh + nama file)."""
+    switch_top(driver)
+    JS_DUMP = """
+return (function(){
+  var out = [];
+  var els = document.querySelectorAll('a, button, [role="button"], span[onclick], div[onclick]');
+  var RE = /UNDUH|DOWNLOAD|PDF|XLS|XLSX|SJ|SURAT|\\.pdf|\\.xls/i;
+  for (var i=0;i<els.length;i++){
+    var el = els[i];
+    var t = (el.innerText||el.textContent||'').trim();
+    var href = el.getAttribute && (el.getAttribute('href')||'') || '';
+    var oncl = el.getAttribute && (el.getAttribute('onclick')||'') || '';
+    var cls = (el.className||'').toString();
+    var tag = el.tagName;
+    if (RE.test(t) || RE.test(href) || RE.test(oncl)){
+      var r = el.getBoundingClientRect();
+      if (r.width>0 && r.height>0){
+        out.push({i:i, tag:tag, text:t.slice(0,60), href:href.slice(0,100), onclick:oncl.slice(0,80), class:cls.slice(0,50)});
+      }
+    }
+  }
+  return out.slice(0, 40);
+})();
+"""
     try:
-        driver.execute_script("""
-            let el = document.querySelector('.slick-viewport, .form-group input, .tab-content, [class*="detail"], .transaction-form');
-            if (!el) el = document.body;
-            if (el) { el.focus(); el.click(); }
-        """)
-    except: pass
-    time.sleep(0.1)
-    # Ctrl+P
-    try:
-        ActionChains(driver).key_down(Keys.CONTROL).send_keys('p').key_up(Keys.CONTROL).perform()
-        say("  [..] Ctrl+P dikirim, tunggu overlay...")
-        ux = wait_report_overlay(driver, timeout=15)
-        if ux: return ux, "Ctrl+P"
-    except: pass
-    # Fallback: klik tombol Cetak
-    try:
-        switch_top(driver)
-        pr = driver.execute_script(JS_FIND_PRINT)
-        if pr:
-            el = find_marked(driver, pr["path"], timeout=5)
-            if el:
-                smart_click(driver, el); clear_mark(driver, pr["path"])
-                say("  [..] Tombol Cetak diklik, tunggu overlay...")
-                ux = wait_report_overlay(driver, timeout=15)
-                if ux: return ux, "tombol Cetak"
-    except: pass
-    # Retry Ctrl+P
-    try:
-        ActionChains(driver).send_keys(Keys.ESCAPE).perform(); time.sleep(0.1)
-        ActionChains(driver).key_down(Keys.CONTROL).send_keys('p').key_up(Keys.CONTROL).perform()
-        say("  [..] Retry Ctrl+P...")
-        ux = wait_report_overlay(driver, timeout=12)
-        if ux: return ux, "Ctrl+P (retry)"
-    except: pass
-    return None, None
+        return driver.execute_script(JS_DUMP) or []
+    except Exception as e:
+        say(f"  [ERR] dump gagal: {e}")
+        return []
+
+def try_click_download_in_panel(driver, panel_dump):
+    """Coba klik link/button download pertama yg relevan."""
+    for item in panel_dump[:10]:
+        txt = (item.get("text") or "").upper()
+        href = (item.get("href") or "")
+        oncl = (item.get("onclick") or "")
+        # Skip kalau cuma "PDF" label doang (bukan link)
+        if txt in ("PDF", "XLS", "XLSX") and not href and not oncl:
+            continue
+        if any(k in txt for k in ("UNDUH", "DOWNLOAD", "CETAK", "SIMPAN")) or href.endswith(".pdf") or href.endswith(".xls"):
+            switch_top(driver)
+            ux = driver.execute_script(JS_FIND_MARK, item["text"], False)
+            if ux:
+                el = find_marked(driver, ux["path"], timeout=3)
+                if el:
+                    how = smart_click(driver, el)
+                    clear_mark(driver, ux["path"])
+                    say(f"  [OK] Diklik: '{item['text'][:40]}' via {how}")
+                    return True
+    return False
 
 def snapshot_downloads():
     try: return set(os.listdir(DOWNLOAD_DIR))
     except: return set()
 
-def wait_new_download(before, timeout=90):
+def wait_new_download(before, timeout=60):
     end = time.time() + timeout
     while time.time() < end:
         try: cur = set(os.listdir(DOWNLOAD_DIR))
@@ -398,16 +398,6 @@ def wait_new_download(before, timeout=90):
         time.sleep(0.25)
     return None
 
-def close_report(driver):
-    try:
-        switch_top(driver)
-        tp = driver.execute_script(JS_FIND_MARK, "Tutup", True)
-        if tp:
-            el = find_marked(driver, tp["path"], timeout=3)
-            if el: smart_click(driver, el)
-            clear_mark(driver, tp["path"])
-    except: pass
-
 def close_detail_tab(driver, kode):
     try:
         switch_top(driver)
@@ -423,7 +413,7 @@ def close_detail_tab(driver, kode):
 # ============================================================
 def main():
     say("=" * 60)
-    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v1 TRIAL)")
+    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v2 TRIAL)")
     say("=" * 60)
     say(f"Folder download: {DOWNLOAD_DIR}")
     if not os.path.isdir(DOWNLOAD_DIR):
@@ -437,11 +427,11 @@ def main():
         say(f"[WARNING] Format kode tidak biasa: {kode} (tetap lanjut)")
     say(f"\nKode: {kode}")
 
-    say("\n[1/6] Connect Chrome port 9222...")
+    say("\n[1/7] Connect Chrome port 9222...")
     driver = connect_chrome()
     say(f"  [OK] Terhubung. Tab aktif: {driver.current_url}")
 
-    say("\n[2/6] Cari frame list...")
+    say("\n[2/7] Cari frame list...")
     fr = find_list_frame(driver, timeout=12)
     if not fr:
         say("  [ERROR] Frame list tidak ditemukan.")
@@ -449,57 +439,76 @@ def main():
         sys.exit(1)
     say(f"  [OK] Frame: {fr}")
 
-    say(f"\n[3/6] Search kode {kode}...")
+    say(f"\n[3/7] Search kode {kode} (via JS setVal)...")
     if not search_kode(driver, kode, fr):
-        say("  [ERROR] Kode tidak ditemukan di grid setelah search (10s).")
-        say("  Kemungkinan: kode bukan transaksi tanggal hari ini, atau filter date perlu diubah.")
+        say("  [ERROR] Kode tidak ditemukan di grid setelah search.")
+        say("  Kemungkinan: kode bukan transaksi tanggal hari ini (cek filter date),")
+        say("  atau halaman list belum terbuka di tab aktif.")
         sys.exit(1)
-    say("  [OK] Kode ditemukan di grid.")
 
-    say("\n[4/6] Klik baris (buka detail)...")
-    row = find_row_with_kode(driver, fr, kode)
-    if not row:
-        say("  [ERROR] Baris tidak bisa diakses lagi setelah search.")
+    say("\n[4/7] Klik baris (buka detail)...")
+    how = click_row_with_kode(driver, fr, kode)
+    if not how:
+        say("  [ERROR] Baris tidak bisa di-klik.")
         sys.exit(1)
-    how = smart_click(driver, row)
     say(f"  [OK] Baris diklik via {how}. Tunggu detail terbuka...")
     if wait_detail_open(driver, kode, timeout=15):
         say("  [OK] Detail form terbuka.")
     else:
-        say("  [WARNING] Detail form tidak terdeteksi (input kode). Lanjut tetap cetak.")
+        say("  [WARNING] Detail form tidak terdeteksi (input kode). Lanjut tetap cari tombol Dokumen.")
 
-    say("\n[5/6] Trigger cetak (Ctrl+P / tombol Cetak)...")
-    ux, method = trigger_print_and_wait(driver)
+    say('\n[5/7] Cari tombol "Dokumen/Komentar" di detail...')
+    ux = find_dokumen_button(driver)
     if not ux:
-        say("  [ERROR] Overlay report tidak muncul setelah Ctrl+P + Cetak fallback.")
-        say("  Saran: coba klik baris manual lalu Ctrl+P manual, lihat apa yg muncul.")
-        say("  Kirim screenshot overlay itu ke saya, saya update selector.")
+        say('  [ERROR] Tombol Dokumen/Komentar tidak ditemukan di detail.')
+        say('  Kirim screenshot halaman detail ke saya, saya cari selector yg benar.')
         sys.exit(1)
-    say(f"  [OK] Overlay muncul via {method}. Tombol unduh ditemukan: '{ux.get('text','?')}'")
-
-    say("\n[6/6] Klik tombol Unduh + tunggu download (maks 90s)...")
-    before = snapshot_downloads()
-    el = find_marked(driver, ux["path"])
+    say(f'  [OK] Ditemukan: "{ux.get("text","?")}"')
+    el = find_marked(driver, ux["path"], timeout=5)
     if not el:
         clear_mark(driver, ux["path"])
-        say("  [ERROR] Tombol Unduh hilang dari overlay sebelum diklik.")
+        say("  [ERROR] Tombol Dokumen hilang sebelum diklik.")
         sys.exit(1)
     smart_click(driver, el); clear_mark(driver, ux["path"])
-    fname = wait_new_download(before, timeout=90)
-    if not fname:
-        say(f"  [ERROR] Download tidak selesai dalam 90 detik. Cek manual: {DOWNLOAD_DIR}")
-        sys.exit(1)
-    final = os.path.join(DOWNLOAD_DIR, fname)
-    say(f"  [OK] File tersimpan: {final}")
+    say("  [OK] Diklik. Tunggu panel dokumen muncul...")
+    time.sleep(3)
 
-    say("\nMenutup overlay + tab detail...")
-    close_report(driver)
+    say("\n[6/7] Dump panel dokumen + cari link download...")
+    panel = dump_dokumen_panel(driver)
+    if not panel:
+        say("  [WARNING] Panel dokumen kosong / tidak ada link download yg terdeteksi.")
+        say("  Mungkin panel belum kebuka, atau butuh klik tab 'Dokumen' spesifik.")
+        say("  Saya tetap coba auto-download dari elemen apa pun yg ada.")
+    else:
+        say(f"  Ditemukan {len(panel)} elemen relevan:")
+        for item in panel:
+            say(f'    [{item["i"]}] <{item["tag"]}> text="{item["text"]}" href="{item["href"][:50]}" onclick="{item["onclick"][:40]}"')
+
+    say("\n[7/7] Coba auto-download...")
+    before = snapshot_downloads()
+    if try_click_download_in_panel(driver, panel):
+        say("  [..] Link download diklik, tunggu file (maks 60s)...")
+        fname = wait_new_download(before, timeout=60)
+        if fname:
+            final = os.path.join(DOWNLOAD_DIR, fname)
+            say(f"\n  [OK] File tersimpan: {final}")
+            close_detail_tab(driver, kode)
+            say("\n" + "=" * 60)
+            say(f"  SELESAI! File: {fname}")
+            say(f"  Lokasi  : {final}")
+            say("=" * 60)
+            return
+        else:
+            say(f"  [ERROR] Download tidak selesai 60s. Cek manual: {DOWNLOAD_DIR}")
+    else:
+        say("  [FAIL] Tidak ada link download otomatis yg bisa diklik.")
+        say("")
+        say("  === PENTING ===")
+        say("  Kirim output ini (terutama bagian [6/7] dump) ke saya.")
+        say("  Dari situ saya bisa lihat selector link download SJ yg benar,")
+        say("  lalu update tool v3 buat auto-download.")
+    # tutup tab detail biar bersih
     close_detail_tab(driver, kode)
-
-    say("\n" + "=" * 60)
-    say(f"  SELESAI! File: {fname}")
-    say(f"  Lokasi  : {final}")
-    say("=" * 60)
 
 if __name__ == "__main__":
     try:
