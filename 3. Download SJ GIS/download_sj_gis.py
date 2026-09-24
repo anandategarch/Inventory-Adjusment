@@ -351,9 +351,9 @@ def click_comment_attachment(driver):
         if btn:
             return smart_click(driver, btn)
     except: pass
-    # Priority 2: by class
+    # Priority 2: by exact class (lebih ketat dari contains)
     try:
-        btns = driver.find_elements(By.CSS_SELECTOR, "i.icn-navigation-attachment, [id*='ommentAttachment'], [class*='navigation-attachment']")
+        btns = driver.find_elements(By.CSS_SELECTOR, "i.icn-navigation-attachment")
         for btn in btns:
             try:
                 if btn.is_displayed():
@@ -365,35 +365,64 @@ def click_comment_attachment(driver):
 # ============================================================
 # STEP 4: CLICK FIRST <a> IN DROPDOWN (.drop-left)
 # ============================================================
-JS_FIND_FIRST_DROPDOWN_A = JS_VIS + """
+# FIX v8.1: HANYA cari ul.drop-left (BUKAN ul generik) + track dropdown BARU
+# (yg muncul setelah klik btnCommentAttachment). Ini cegah klik Dashboard link.
+JS_COUNT_DROPLEFT = JS_VIS + """
 return (function(){
+  var uls = document.querySelectorAll('ul.drop-left');
+  var visible = 0;
+  for (var i=0;i<uls.length;i++){
+    if (vis(uls[i])) visible++;
+  }
+  return {total: uls.length, visible: visible};
+})();
+"""
+
+JS_FIND_NEW_DROPDOWN_A = JS_VIS + """
+return (function(beforeVisible){
   var ATTR='data-fl-target';
-  var uls = document.querySelectorAll('ul.drop-left, ul[class*="drop"], ul.dropdown-menu, ul.d-menu, ul');
+  var uls = document.querySelectorAll('ul.drop-left');  // HANYA drop-left, bukan ul generik
+  var found = null;
   for (var i=0;i<uls.length;i++){
     var ul = uls[i];
     if (!vis(ul)) continue;
+    var r = ul.getBoundingClientRect();
+    if (r.width<=0 || r.height<=0) continue;
+    // Cari <a> pertama yg visible di dropdown ini
     var links = ul.querySelectorAll('a, li > a');
     for (var j=0;j<links.length;j++){
       var a = links[j];
       if (!vis(a)) continue;
       var t = (a.innerText||'').trim();
       if (!t || t.length > 40) continue;
+      // EXCLUDE link Dashboard/main-menu (href #module-accurate__dashboard)
+      var href = (a.getAttribute('href')||'');
+      if (href.indexOf('dashboard') !== -1) continue;
       a.setAttribute(ATTR,'1');
-      return {text:t, href:(a.getAttribute('href')||'').slice(0,80)};
+      return {text:t, href:href.slice(0,80), idx:i};
     }
   }
   return null;
-})();
+})(arguments[0]);
 """
 
-def click_first_dropdown_item(driver, timeout=5):
-    """Setelah btnCommentAttachment, tunggu dropdown, klik <a> pertama."""
+def click_first_dropdown_item(driver, timeout=8):
+    """Setelah btnCommentAttachment, tunggu ul.drop-left BARU muncul, klik <a> pertama.
+    FIX v8.1: cuma cari ul.drop-left (bukan ul generik) + exclude Dashboard link."""
+    switch_top(driver)
+    # Catat jumlah dropdown visible sebelum (baseline)
+    try:
+        before = driver.execute_script(JS_COUNT_DROPLEFT) or {"visible":0}
+    except:
+        before = {"visible":0}
+    say(f"      [baseline] ul.drop-left visible: {before.get('visible',0)}")
     end = time.time() + timeout
     while time.time() < end:
         switch_top(driver)
         try:
-            ux = driver.execute_script(JS_FIND_FIRST_DROPDOWN_A)
+            ux = driver.execute_script(JS_FIND_NEW_DROPDOWN_A, before.get("visible",0))
             if ux:
+                say(f"      [found] dropdown <a>: text='{ux.get('text','')}' href='{ux.get('href','')[:40]}'")
                 el = find_marked(driver, [], timeout=2)
                 if el:
                     how = smart_click(driver, el)
@@ -421,22 +450,24 @@ def wait_attachment_panel(driver, timeout=15):
         time.sleep(0.5)
     return False
 
+# FIX v8.1: cari i.icon-download-2 HANYA di dalam attachment panel (div[id^='accurate__company__attachment'])
+# (sebelumnya cari di seluruh dokumen -> bisa ketemu icon-download-2 di tempat lain)
 JS_FIND_DOWNLOAD_ICON = JS_VIS + """
 return (function(){
   var ATTR='data-fl-target';
-  var icons = document.querySelectorAll('i.icon-download-2, i[class*="icon-download"], [class*="icon-download-2"]');
-  for (var i=0;i<icons.length;i++){
-    var ic = icons[i];
-    if (!vis(ic)) continue;
-    var a = ic.closest('a');
-    if (a && vis(a)){
-      a.setAttribute(ATTR,'1');
-      return {text:(a.innerText||'').trim().slice(0,40), href:(a.getAttribute('href')||'').slice(0,100)};
-    }
-    // fallback: click icon sendiri
-    if (vis(ic)){
-      ic.setAttribute(ATTR,'1');
-      return {text:'(icon)', href:''};
+  var panels = document.querySelectorAll("div[id^='accurate__company__attachment']");
+  for (var p=0;p<panels.length;p++){
+    var panel = panels[p];
+    if (!vis(panel)) continue;
+    var icons = panel.querySelectorAll('i.icon-download-2, i[class*="icon-download"]');
+    for (var i=0;i<icons.length;i++){
+      var ic = icons[i];
+      if (!vis(ic)) continue;
+      var a = ic.closest('a');
+      if (a && vis(a)){
+        a.setAttribute(ATTR,'1');
+        return {text:(a.innerText||'').trim().slice(0,40), href:(a.getAttribute('href')||'').slice(0,100), panel:panel.id};
+      }
     }
   }
   return null;
@@ -464,12 +495,22 @@ def click_download_icon(driver, timeout=10):
 # CLEANUP: CLOSE ATTACHMENT OVERLAY + DETAIL TAB
 # ============================================================
 def close_attachment_overlay(driver, timeout=5):
-    """Tutup overlay attachment (button.btn-close di .window-overlay)."""
+    """Tutup overlay attachment. FIX v8.1: priority div.window-overlay button.btn-close
+    (bukan btn-close generik yg bisa kena tombol lain)."""
     end = time.time() + timeout
     while time.time() < end:
         switch_top(driver)
         try:
-            btns = driver.find_elements(By.CSS_SELECTOR, "button.btn-close")
+            # Priority 1: btn-close di dalam window-overlay (attachment dialog)
+            btns = driver.find_elements(By.CSS_SELECTOR, "div.window-overlay button.btn-close, .window button.btn-close, .metro-window button.btn-close")
+            for btn in btns:
+                try:
+                    if btn.is_displayed():
+                        smart_click(driver, btn)
+                        return True
+                except: continue
+            # Priority 2: caption bar btn-close
+            btns = driver.find_elements(By.CSS_SELECTOR, "div.caption button.btn-close")
             for btn in btns:
                 try:
                     if btn.is_displayed():
@@ -479,6 +520,31 @@ def close_attachment_overlay(driver, timeout=5):
         except: pass
         time.sleep(0.4)
     return False
+
+def verify_still_on_detail(driver, kode):
+    """Safety check: pastikan nggak ke-navigation ke Dashboard/halaman lain setelah klik dropdown.
+    Return True kalau masih di halaman detail item-transfer."""
+    try:
+        switch_top(driver)
+        url = (driver.current_url or "").lower()
+        # Kalau URL jadi dashboard & bukan item-transfer → navigated away
+        if "dashboard" in url and "item-transfer" not in url:
+            say(f"      [SAFETY] Navigasi ke Dashboard terdeteksi! Abort.")
+            return False
+        # Cek btnCommentAttachment masih ada (marker detail form)
+        btns = driver.find_elements(By.ID, "btnCommentAttachment")
+        if btns:
+            return True
+        # Cek tab detail masih ada (berisi kode)
+        tabs = driver.find_elements(By.CSS_SELECTOR, "div.module-tab, div.form-tab-title")
+        for t in tabs:
+            try:
+                if kode in (t.text or ""):
+                    return True
+            except: continue
+        return False
+    except:
+        return False
 
 def close_detail_tab(driver, kode, timeout=5):
     """Tutup tab detail (klik i.icon-cancel-2.smaller di tab berisi kode)."""
@@ -591,6 +657,14 @@ def process_one_kode(driver, kode, fr, seq, total):
             return False, "E_DROPDOWN"
         say(f"  [OK] Dropdown item diklik via {how}. Tunggu attachment panel...")
 
+        # 4.5 SAFETY CHECK: pastikan nggak ke-navigation ke Dashboard
+        time.sleep(1)
+        if not verify_still_on_detail(driver, kode):
+            say(f"  [ERROR] Halaman berubah (ke Dashboard?) setelah klik dropdown.")
+            say(f"  Ini berarti dropdown click kena link salah. Abort + recover.")
+            recover_to_list(driver, kode)
+            return False, "E_NAVIGATED_AWAY"
+
         # 5. Wait attachment panel
         say(f"  [5/7] Tunggu attachment panel...")
         if not wait_attachment_panel(driver, timeout=15):
@@ -634,7 +708,7 @@ def process_one_kode(driver, kode, fr, seq, total):
 
 def main():
     say("=" * 60)
-    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8 FINAL)")
+    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.1 FINAL)")
     say("=" * 60)
     say(f"Folder download: {DOWNLOAD_DIR}")
     if not os.path.isdir(DOWNLOAD_DIR):
