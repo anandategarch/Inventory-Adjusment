@@ -86,22 +86,43 @@ Detail lengkap mode & pengaman data ada di `2. Import IA/README.txt`.
 
 ## 3. Download SJ GIS
 
-> **Status: TRIAL — tahap deteksi struktur halaman.**
-> Tool final belum ditulis. Saat ini berisi script DETEKSI untuk membaca
-> struktur halaman Pemindahan Barang agar tool final bisa ditulis dengan benar.
+> **Status: TRIAL — tool final v1.**
+> Download Surat Jalan dari modul Pemindahan Barang (database GiS) Accurate Online.
+
+### Tool Final
 
 | File | Fungsi |
 |------|--------|
-| `DETEKSI_HALAMAN.py` | Script diagnostik: connect Chrome → cari search box → ketik kode (mis. `IT.2026.09.19805`) → klik baris → cetak struktur halaman + simpan HTML snapshot |
-| `JALANKAN_DETEKSI.bat` | Peluncur (pasang selenium + jalankan deteksi) |
+| `download_sj_gis.py` | Tool utama: search kode → klik baris → cetak (Ctrl+P) → unduh dari overlay. Reuse helper proven dari `unduh_xls_loop.py` (smart_click, JS_FIND_MARK, JS_FIND_PRINT, wait overlay, wait download) |
+| `JALANKAN_SJ_GIS.bat` | Peluncur (pasang selenium + jalankan tool) |
 
-**Cara pakai (sekali saja):**
+**Cara pakai:**
 1. Buka Chrome dengan remote debugging port 9222, login Accurate, buka **LIST Pemindahan Barang**.
-2. Jalankan `JALANKAN_DETEKSI.bat`.
-3. Masukkan kode SJ (default: `IT.2026.09.19805`), Enter.
-4. Tunggu selesai, lalu kirim output + file `deteksi_page.html` ke developer supaya tool final bisa ditulis.
+2. Jalankan `JALANKAN_SJ_GIS.bat`.
+3. Masukkan kode SJ (mis. `IT.2026.09.19805`), Enter.
+4. Tunggu sampai `SELESAI! File: ...`. File tersimpan di folder `Downloads`.
 
-**Aman:** script ini TIDAK melakukan download/simpan/hapus. Cuma baca + ketik + klik 1 baris.
+**Alur tool:**
+1. Connect Chrome port 9222 (attach ke session yg sudah login)
+2. Cari frame list (iframe berisi `.slick-row` / `input[name=keyword]`)
+3. Ketik kode di search box + klik `button.btn-search`
+4. Tunggu baris berisi kode muncul di grid
+5. Klik baris via `ActionChains` (trusted click, bukan synthetic JS)
+6. Tunggu detail form terbuka
+7. Trigger cetak: `Ctrl+P` dulu, fallback klik tombol Cetak
+8. Tunggu overlay report + cari tombol Unduh (match "Unduh" — catch Unduh PDF/XLS/dst)
+9. Klik Unduh + tunggu file baru di `~/Downloads` (`.pdf` / `.xls` / `.xlsx`)
+10. Tutup overlay + tab detail
+
+### File Deteksi (arsip — untuk debug struktur halaman)
+
+| File | Fungsi |
+|------|--------|
+| `DETEKSI_HALAMAN.py` | Script diagnostik versi Python (backup) |
+| `DETEKSI_HALAMAN.js` | Script diagnostik versi paste-to-Console (lebih cepat, skip Chrome port connect) |
+| `JALANKAN_DETEKSI.bat` | Peluncur versi Python deteksi |
+
+Dipakai saat pengembangan untuk membaca struktur DOM halaman. Tidak dipakai di alur final.
 
 ---
 
