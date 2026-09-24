@@ -399,66 +399,95 @@ def check_new_tab_and_switch(driver, before_handles):
     return False
 
 JS_DUMP_DETAIL_STATE = JS_VIS + """
-return (function(){
+return (function(kode){
   var out = {url: location.href, title: document.title, tabs: window.length,
-             buttons: [], links: [], dokumenEls: [], kodeEls: []};
-  var btns = document.querySelectorAll('button, [role="button"], a.btn, .button');
-  for (var i=0;i<btns.length && out.buttons.length<30;i++){
+             internalTabs: [], allButtons: [], dokumenEls: [], kodeEls: []};
+  // Internal Accurate tabs (aol-main-tab-*) — apakah ada tab detail baru?
+  var tabEls = document.querySelectorAll('[class*="aol-main-tab"], .left-tab');
+  for (var i=0;i<tabEls.length;i++){
+    var t = (tabEls[i].innerText||'').trim().slice(0,40);
+    if (!t) continue;
+    out.internalTabs.push({text:t, class:(tabEls[i].className||'').toString().slice(0,50)});
+  }
+  // SEMUA buttons (visible + hidden) — catch detail buttons di tab hidden
+  var btns = document.querySelectorAll('button, [role="button"], a.btn, .button, input[type="button"]');
+  for (var i=0;i<btns.length && out.allButtons.length<50;i++){
     var b = btns[i];
-    if (!vis(b)) continue;
+    var st = window.getComputedStyle(b);
+    var vis = !(st.display==='none'||st.visibility==='hidden'||parseFloat(st.opacity)===0);
+    var r = b.getBoundingClientRect();
+    var sizeOk = r.width>0 && r.height>0;
     var t = (b.innerText||b.textContent||'').trim().slice(0,40);
     var ti = (b.getAttribute && b.getAttribute('title')||'').slice(0,40);
     var nm = b.name||''; var cls = (b.className||'').toString().slice(0,40);
     var ic = b.querySelector('i,span[class*="icon"],[class*="mif-"]');
     var icon = ic ? (ic.className||'').toString().slice(0,40) : '';
-    out.buttons.push({t:t||ti||'(no text)', name:nm, class:cls, icon:icon});
-  }
-  var lnks = document.querySelectorAll('a[href]');
-  for (var i=0;i<lnks.length && out.links.length<15;i++){
-    var a = lnks[i]; if (!vis(a)) continue;
-    out.links.push({text:(a.innerText||'').trim().slice(0,40), href:(a.getAttribute('href')||'').slice(0,60)});
+    out.allButtons.push({t:t||ti||'(no text)', name:nm, class:cls, icon:icon,
+                         visible: vis && sizeOk});
   }
   var all = document.querySelectorAll('*');
   var RE_DOC = /DOKUMEN|KOMENTAR|LAMPIRAN|ATTACH|COMMENT|DOCUMENT/i;
-  for (var i=0;i<all.length && out.dokumenEls.length<20;i++){
-    var el = all[i]; if (!vis(el)) continue;
+  for (var i=0;i<all.length && out.dokumenEls.length<25;i++){
+    var el = all[i];
     var t = (el.innerText||'').trim();
-    if (t && t.length<40 && RE_DOC.test(t)){
-      var ic2 = el.querySelector('i,span[class*="icon"],[class*="mif-"]');
-      out.dokumenEls.push({tag:el.tagName, text:t, class:(el.className||'').toString().slice(0,40),
-                          icon: ic2?(ic2.className||'').toString().slice(0,40):''});
+    if (!t || t.length>50) continue;
+    if (RE_DOC.test(t)){
+      var st2 = window.getComputedStyle(el);
+      out.dokumenEls.push({tag:el.tagName, text:t.slice(0,50),
+                           class:(el.className||'').toString().slice(0,40),
+                           visible: !(st2.display==='none'||st2.visibility==='hidden')});
+    }
+  }
+  // Elemen berisi kode (di mana kode muncul setelah klik?)
+  for (var i=0;i<all.length && out.kodeEls.length<15;i++){
+    var el = all[i];
+    var t = (el.innerText||'').trim();
+    if (!t || t.length>80) continue;
+    if (t.indexOf(kode) !== -1 && t.length < 80){
+      out.kodeEls.push({tag:el.tagName, text:t.slice(0,70),
+                        class:(el.className||'').toString().slice(0,40)});
     }
   }
   return out;
-})();
+})(arguments[0]);
 """
 
 def dump_detail_state(driver, kode):
-    """Dump komprehensif state halaman setelah klik baris (cari dimana tombol Dokumen)."""
+    """Dump komprehensif — internal tabs + ALL buttons (visible+hidden) + elemen Dokumen + elemen kode."""
     switch_top(driver)
     try:
-        st = driver.execute_script(JS_DUMP_DETAIL_STATE)
+        st = driver.execute_script(JS_DUMP_DETAIL_STATE, kode)
     except Exception as e:
         say(f"  [ERR] dump gagal: {e}"); return
     say(f"  URL: {st.get('url','?')[:80]}")
     say(f"  Title: {st.get('title','?')}")
     say(f"  Iframe count: {st.get('tabs',0)}")
-    btns = st.get('buttons', [])
-    say(f"\n  --- BUTTONS terlihat ({len(btns)}) ---")
+    # Internal tabs
+    tabs = st.get('internalTabs', [])
+    say(f"\n  --- INTERNAL TABS Accurate ({len(tabs)}) ---")
+    for i, t in enumerate(tabs):
+        say(f'    [{i}] text="{t["text"]}" class="{t["class"]}"')
+    # ALL buttons (visible + hidden)
+    btns = st.get('allButtons', [])
+    visBtns = [b for b in btns if b.get('visible')]
+    hidBtns = [b for b in btns if not b.get('visible')]
+    say(f"\n  --- ALL BUTTONS ({len(btns)}: {len(visBtns)} visible, {len(hidBtns)} hidden) ---")
     for i, b in enumerate(btns):
-        say(f'    [{i}] text="{b["t"]}" name="{b["name"]}" class="{b["class"]}" icon="{b["icon"]}"')
-    lnks = st.get('links', [])
-    if lnks:
-        say(f"\n  --- LINKS ({len(lnks)}) ---")
-        for i, l in enumerate(lnks):
-            say(f'    [{i}] text="{l["text"]}" href="{l["href"]}"')
+        v = "VIS" if b.get('visible') else "HID"
+        say(f'    [{i}] [{v}] text="{b["t"]}" name="{b["name"]}" class="{b["class"]}" icon="{b["icon"]}"')
+    # Dokumen elements
     docEls = st.get('dokumenEls', [])
-    if docEls:
-        say(f'\n  --- ELEMEN DOKUMEN/KOMENTAR ({len(docEls)}) ---')
-        for i, d in enumerate(docEls):
-            say(f'    [{i}] <{d["tag"]}> text="{d["text"]}" class="{d["class"]}" icon="{d["icon"]}"')
-    else:
-        say("\n  (tidak ada elemen dengan teks Dokumen/Komentar/Lampiran/Attachment)")
+    say(f"\n  --- ELEMEN DOKUMEN/KOMENTAR ({len(docEls)}) ---")
+    if not docEls:
+        say("    (tidak ada elemen dengan teks Dokumen/Komentar/Lampiran/Attachment)")
+    for i, d in enumerate(docEls):
+        v = "VIS" if d.get('visible') else "HID"
+        say(f'    [{i}] [{v}] <{d["tag"]}> text="{d["text"]}" class="{d["class"]}"')
+    # Elements containing kode
+    kodeEls = st.get('kodeEls', [])
+    say(f"\n  --- ELEMEN BERISI KODE ({len(kodeEls)}) ---")
+    for i, k in enumerate(kodeEls):
+        say(f'    [{i}] <{k["tag"]}> text="{k["text"]}" class="{k["class"]}"')
 
 def find_dokumen_button(driver):
     """Cari tombol Dokumen/Komentar di detail view. Cari by text AND by icon."""
