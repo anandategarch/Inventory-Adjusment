@@ -161,7 +161,14 @@ JS_DETAIL_OPEN = JS_VIS + """
 return (function(nomor){
   function scan(doc){
     const inps = doc.querySelectorAll('input');
-    for (const i of inps){ if ((i.value||'').trim()===nomor && vis(i)) return true; }
+    for (const i of inps){
+      if (i.name === 'keyword') continue;
+      if (i.name === 'searchDetailItem') continue;
+      if (i.name === 'warehouse') continue;
+      if (i.name === 'referenceWarehouse') continue;
+      if (i.name === 'transDate') continue;
+      if ((i.value||'').trim()===nomor && vis(i)) return true;
+    }
     const fr = doc.querySelectorAll('iframe, frame');
     for (let i=0;i<fr.length;i++){ try{ const d=fr[i].contentDocument; if(d && scan(d)) return true; }catch(e){} }
     return false;
@@ -314,14 +321,113 @@ def wait_detail_open(driver, kode, timeout=15):
         time.sleep(0.3)
     return False
 
-def find_dokumen_button(driver):
-    """Cari tombol Dokumen/Komentar/Lampiran di detail view."""
+def check_new_tab_and_switch(driver, before_handles):
+    """Cek apakah klik baris membuka tab browser baru. Switch ke tab terbaru kalau ada."""
+    after = driver.window_handles
+    if len(after) > len(before_handles):
+        driver.switch_to.window(after[-1])
+        say(f"  [OK] Tab baru terbuka. Switch ke tab {len(after)}/{len(after)}: {driver.current_url[:60]}")
+        return True
+    return False
+
+JS_DUMP_DETAIL_STATE = JS_VIS + """
+return (function(){
+  var out = {url: location.href, title: document.title, tabs: window.length,
+             buttons: [], links: [], dokumenEls: [], kodeEls: []};
+  var btns = document.querySelectorAll('button, [role="button"], a.btn, .button');
+  for (var i=0;i<btns.length && out.buttons.length<30;i++){
+    var b = btns[i];
+    if (!vis(b)) continue;
+    var t = (b.innerText||b.textContent||'').trim().slice(0,40);
+    var ti = (b.getAttribute && b.getAttribute('title')||'').slice(0,40);
+    var nm = b.name||''; var cls = (b.className||'').toString().slice(0,40);
+    var ic = b.querySelector('i,span[class*="icon"],[class*="mif-"]');
+    var icon = ic ? (ic.className||'').toString().slice(0,40) : '';
+    out.buttons.push({t:t||ti||'(no text)', name:nm, class:cls, icon:icon});
+  }
+  var lnks = document.querySelectorAll('a[href]');
+  for (var i=0;i<lnks.length && out.links.length<15;i++){
+    var a = lnks[i]; if (!vis(a)) continue;
+    out.links.push({text:(a.innerText||'').trim().slice(0,40), href:(a.getAttribute('href')||'').slice(0,60)});
+  }
+  var all = document.querySelectorAll('*');
+  var RE_DOC = /DOKUMEN|KOMENTAR|LAMPIRAN|ATTACH|COMMENT|DOCUMENT/i;
+  for (var i=0;i<all.length && out.dokumenEls.length<20;i++){
+    var el = all[i]; if (!vis(el)) continue;
+    var t = (el.innerText||'').trim();
+    if (t && t.length<40 && RE_DOC.test(t)){
+      var ic2 = el.querySelector('i,span[class*="icon"],[class*="mif-"]');
+      out.dokumenEls.push({tag:el.tagName, text:t, class:(el.className||'').toString().slice(0,40),
+                          icon: ic2?(ic2.className||'').toString().slice(0,40):''});
+    }
+  }
+  return out;
+})();
+"""
+
+def dump_detail_state(driver, kode):
+    """Dump komprehensif state halaman setelah klik baris (cari dimana tombol Dokumen)."""
     switch_top(driver)
-    for txt in DOKUMEN_TEXTS:
+    try:
+        st = driver.execute_script(JS_DUMP_DETAIL_STATE)
+    except Exception as e:
+        say(f"  [ERR] dump gagal: {e}"); return
+    say(f"  URL: {st.get('url','?')[:80]}")
+    say(f"  Title: {st.get('title','?')}")
+    say(f"  Iframe count: {st.get('tabs',0)}")
+    btns = st.get('buttons', [])
+    say(f"\n  --- BUTTONS terlihat ({len(btns)}) ---")
+    for i, b in enumerate(btns):
+        say(f'    [{i}] text="{b["t"]}" name="{b["name"]}" class="{b["class"]}" icon="{b["icon"]}"')
+    lnks = st.get('links', [])
+    if lnks:
+        say(f"\n  --- LINKS ({len(lnks)}) ---")
+        for i, l in enumerate(lnks):
+            say(f'    [{i}] text="{l["text"]}" href="{l["href"]}"')
+    docEls = st.get('dokumenEls', [])
+    if docEls:
+        say(f'\n  --- ELEMEN DOKUMEN/KOMENTAR ({len(docEls)}) ---')
+        for i, d in enumerate(docEls):
+            say(f'    [{i}] <{d["tag"]}> text="{d["text"]}" class="{d["class"]}" icon="{d["icon"]}"')
+    else:
+        say("\n  (tidak ada elemen dengan teks Dokumen/Komentar/Lampiran/Attachment)")
+
+def find_dokumen_button(driver):
+    """Cari tombol Dokumen/Komentar di detail view. Cari by text AND by icon."""
+    switch_top(driver)
+    # 1. Cari by text (Indonesia + English)
+    for txt in DOKUMEN_TEXTS + ["Comment", "Document", "Attachment", "Files", "Berkas"]:
         ux = driver.execute_script(JS_FIND_MARK, txt, False)
         if ux:
-            return ux
-    return None
+            return ux, f"text:{txt}"
+    # 2. Cari by icon class (Accurate pakai Metro UI: mif-doc, mif-attachment, dll)
+    JS_FIND_BY_ICON = JS_VIS + """
+return (function(){
+  var ATTR='data-fl-target';
+  var RE = /mif-doc|mif-attachment|mif-files|mif-comment|icon-doc|icon-attachment|icon-comment|icon-files|fa-paperclip|fa-file/i;
+  function scan(doc, path){
+    var els = doc.querySelectorAll('button, a, span, i, [role="button"]');
+    for (var el of els){
+      if (!vis(el)) continue;
+      var cls = (el.className||'').toString();
+      if (RE.test(cls)){
+        var target = el.closest('button,a,[role="button"]') || el;
+        target.setAttribute(ATTR,'1');
+        return {path:path, text:(target.innerText||'').slice(0,60), html:(target.outerHTML||'').slice(0,400), icon:cls.slice(0,60)};
+      }
+    }
+    var fr = doc.querySelectorAll('iframe, frame');
+    for (var i=0;i<fr.length;i++){ try{var d=fr[i].contentDocument; if(!d)continue; var r=scan(d,path.concat([i])); if(r)return r;}catch(e){} }
+    return null;
+  }
+  return scan(document, []);
+})();
+"""
+    try:
+        ux = driver.execute_script(JS_FIND_BY_ICON)
+        if ux: return ux, f"icon:{ux.get('icon','?')}"
+    except: pass
+    return None, None
 
 def dump_dokumen_panel(driver):
     """Dump semua link/button relevan di panel dokumen (download/pdf/xls/unduh + nama file)."""
@@ -448,23 +554,38 @@ def main():
         sys.exit(1)
 
     say("\n[4/7] Klik baris (buka detail)...")
+    before_handles = driver.window_handles
     how = click_row_with_kode(driver, fr, kode)
     if not how:
         say("  [ERROR] Baris tidak bisa di-klik.")
         sys.exit(1)
-    say(f"  [OK] Baris diklik via {how}. Tunggu detail terbuka...")
+    say(f"  [OK] Baris diklik via {how}.")
+    time.sleep(2)
+    # Cek apakah tab browser baru terbuka
+    check_new_tab_and_switch(driver, before_handles)
+    # Tunggu detail form (input kode, exclude search box)
     if wait_detail_open(driver, kode, timeout=15):
-        say("  [OK] Detail form terbuka.")
+        say("  [OK] Detail form terbuka (input kode ditemukan, exclude search box).")
     else:
-        say("  [WARNING] Detail form tidak terdeteksi (input kode). Lanjut tetap cari tombol Dokumen.")
+        say("  [WARNING] Detail form TIDAK terdeteksi. Mungkin detail belum kebuka,")
+        say("  atau detail kebuka tapi input nomor-nya bukan <input> (label/text doang).")
+        say("  Lanjut tetap dump state + cari tombol Dokumen.")
 
-    say('\n[5/7] Cari tombol "Dokumen/Komentar" di detail...')
-    ux = find_dokumen_button(driver)
+    say("\n[5/7] DUMP STATE HALAMAN (cari dimana tombol Dokumen)...")
+    dump_detail_state(driver, kode)
+
+    say('\n[6/7] Cari tombol "Dokumen/Komentar" di detail...')
+    ux, found_via = find_dokumen_button(driver)
     if not ux:
-        say('  [ERROR] Tombol Dokumen/Komentar tidak ditemukan di detail.')
-        say('  Kirim screenshot halaman detail ke saya, saya cari selector yg benar.')
+        say('  [ERROR] Tombol Dokumen/Komentar tidak ditemukan via text/icon.')
+        say('')
+        say('  === PENTING ===')
+        say('  Kirim output bagian [5/7] DUMP STATE di atas ke saya.')
+        say('  Dari list buttons + elemen Dokumen/Komentar yg tercetak,')
+        say('  saya bisa tentukan selector tombol yg benar buat v4.')
+        close_detail_tab(driver, kode)
         sys.exit(1)
-    say(f'  [OK] Ditemukan: "{ux.get("text","?")}"')
+    say(f'  [OK] Ditemukan via {found_via}: "{ux.get("text","?")}"')
     el = find_marked(driver, ux["path"], timeout=5)
     if not el:
         clear_mark(driver, ux["path"])
@@ -474,7 +595,7 @@ def main():
     say("  [OK] Diklik. Tunggu panel dokumen muncul...")
     time.sleep(3)
 
-    say("\n[6/7] Dump panel dokumen + cari link download...")
+    say("\n[7/8] Dump panel dokumen + cari link download...")
     panel = dump_dokumen_panel(driver)
     if not panel:
         say("  [WARNING] Panel dokumen kosong / tidak ada link download yg terdeteksi.")
@@ -485,7 +606,7 @@ def main():
         for item in panel:
             say(f'    [{item["i"]}] <{item["tag"]}> text="{item["text"]}" href="{item["href"][:50]}" onclick="{item["onclick"][:40]}"')
 
-    say("\n[7/7] Coba auto-download...")
+    say("\n[8/8] Coba auto-download...")
     before = snapshot_downloads()
     if try_click_download_in_panel(driver, panel):
         say("  [..] Link download diklik, tunggu file (maks 60s)...")

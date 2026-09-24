@@ -1,11 +1,11 @@
 @echo off
 setlocal
 chcp 65001 >nul
-title Download SJ GIS - Pemindahan Barang (TRIAL v2)
+title Download SJ GIS - Pemindahan Barang (TRIAL v3)
 color 0A
 cls
 echo ============================================================
-echo   DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v2 TRIAL)
+echo   DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v3 TRIAL)
 echo ============================================================
 echo.
 echo  Alur: search kode ^> klik baris ^> buka detail ^> klik tombol
