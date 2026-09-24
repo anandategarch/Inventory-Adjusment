@@ -86,7 +86,22 @@ Detail lengkap mode & pengaman data ada di `2. Import IA/README.txt`.
 
 ## 3. Download SJ GIS
 
-> Folder kosong. Tooling akan ditambahkan kemudian.
+> **Status: TRIAL — tahap deteksi struktur halaman.**
+> Tool final belum ditulis. Saat ini berisi script DETEKSI untuk membaca
+> struktur halaman Pemindahan Barang agar tool final bisa ditulis dengan benar.
+
+| File | Fungsi |
+|------|--------|
+| `DETEKSI_HALAMAN.py` | Script diagnostik: connect Chrome → cari search box → ketik kode (mis. `IT.2026.09.19805`) → klik baris → cetak struktur halaman + simpan HTML snapshot |
+| `JALANKAN_DETEKSI.bat` | Peluncur (pasang selenium + jalankan deteksi) |
+
+**Cara pakai (sekali saja):**
+1. Buka Chrome dengan remote debugging port 9222, login Accurate, buka **LIST Pemindahan Barang**.
+2. Jalankan `JALANKAN_DETEKSI.bat`.
+3. Masukkan kode SJ (default: `IT.2026.09.19805`), Enter.
+4. Tunggu selesai, lalu kirim output + file `deteksi_page.html` ke developer supaya tool final bisa ditulis.
+
+**Aman:** script ini TIDAK melakukan download/simpan/hapus. Cuma baca + ketik + klik 1 baris.
 
 ---
 
