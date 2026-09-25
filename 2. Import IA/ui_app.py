@@ -1,6 +1,13 @@
 """
-ui_app.py — tampilan aplikasi Import IA (v4.11, pasangan accurate_bot.py v4.7).
+ui_app.py — tampilan aplikasi Import IA (v4.12, pasangan accurate_bot.py v4.7).
 Tab: Otomasi | Database COA & Keterangan | Download Draft IA | Download SJ GIS.
+v4.12: tombol "Buka Chrome 9222" di Card 2 (Kontrol) tab Download SJ GIS —
+meluncurkan chrome.exe dengan --remote-debugging-port=9222 +
+--user-data-dir=C:\\ChromeDebugProfile lalu buka https://accurate.id.
+Auto-finds chrome.exe (Program Files / x86 / LOCALAPPDATA / PATH). Setelah
+launch: tunggu 3s + auto re-check port 9222 via _sj_check_chrome(). Non-blocking
+(subprocess.Popen). Tidak simpan password — user login manual sekali, sesi
+persist di C:\\ChromeDebugProfile.
 v4.11: tab keempat "Download SJ GIS" — menjalankan download_sj_gis.py (v8.12,
 folder 3. Download SJ GIS) sebagai subprocess. Kode SJ dikirim via env var
 SJ_GIS_KODES (string dipisah koma). Stdout direplay ke widget log terminal
@@ -616,6 +623,10 @@ class AutoImportApp(tk.Tk):
 
         sj_ctl_btns = tk.Frame(sj_ctl_card, bg=C_CARD)
         sj_ctl_btns.grid(row=3, column=0, sticky="ew", padx=14, pady=(0, 6))
+        # "Buka Chrome 9222" tombol paling menonjol (paling sering dipakai utk mulai kerja).
+        ttk.Button(sj_ctl_btns, text="🌐  Buka Chrome 9222",
+                   style="Success.TButton",
+                   command=self._sj_launch_chrome).pack(side="left", padx=(0, 8))
         ttk.Button(sj_ctl_btns, text="Deteksi Ulang",
                    command=self._sj_detect_script).pack(side="left", padx=(0, 8))
         ttk.Button(sj_ctl_btns, text="Cek Chrome",
@@ -840,6 +851,62 @@ class AutoImportApp(tk.Tk):
             pass
         self.sj_chrome_lbl.configure(text="Chrome 9222: ✗ belum aktif", fg="#dc2626")
         return False
+
+    def _sj_launch_chrome(self):
+        """Launch Chrome with debugging port 9222, open accurate.id. Auto re-check after."""
+        # Cari chrome.exe di lokasi umum (Program Files / x86 / LOCALAPPDATA / PATH).
+        chrome_paths = [
+            os.path.join(os.environ.get("PROGRAMFILES", "C:\\Program Files"),
+                         "Google", "Chrome", "Application", "chrome.exe"),
+            os.path.join(os.environ.get("PROGRAMFILES(X86)", "C:\\Program Files (x86)"),
+                         "Google", "Chrome", "Application", "chrome.exe"),
+            os.path.join(os.environ.get("LOCALAPPDATA", ""),
+                         "Google", "Chrome", "Application", "chrome.exe"),
+        ]
+        chrome_path = None
+        for p in chrome_paths:
+            if p and os.path.isfile(p):
+                chrome_path = p
+                break
+        if not chrome_path:
+            # Fallback: cari di PATH sistem.
+            try:
+                import shutil
+                chrome_path = shutil.which("chrome") or shutil.which("chrome.exe")
+            except Exception:
+                chrome_path = None
+        if not chrome_path:
+            messagebox.showwarning(
+                APP_TITLE,
+                "chrome.exe tidak ditemukan.\n"
+                "Cari manual di:\n"
+                "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+                parent=self)
+            return
+        try:
+            subprocess.Popen([
+                chrome_path,
+                "--remote-debugging-port=9222",
+                "--user-data-dir=C:\\ChromeDebugProfile",
+                "https://accurate.id",
+            ])
+            self._sj_log_line("[INFO] Chrome diluncurkan dengan port 9222. Tunggu 3 detik, cek koneksi...")
+            self.sj_status_lbl.configure(text="Chrome diluncurkan, tunggu 3s...")
+            # Re-check setelah 3 detik (beri waktu Chrome start + listen port 9222).
+            def _recheck():
+                time.sleep(3)
+                ok = self._sj_check_chrome()
+                if ok:
+                    self._sj_log_line("[OK] Chrome 9222 terhubung. Siap download.")
+                    self.sj_status_lbl.configure(text="Chrome 9222 siap. Klik Mulai Download.")
+                else:
+                    self._sj_log_line("[WARNING] Chrome blm terdeteksi di port 9222. "
+                                      "Tunggu Chrome selesai load, lalu klik 'Cek Chrome'.")
+                    self.sj_status_lbl.configure(
+                        text="Chrome launching... klik 'Cek Chrome' untuk verifikasi.")
+            threading.Thread(target=_recheck, daemon=True).start()
+        except Exception as e:
+            messagebox.showerror(APP_TITLE, f"Gagal meluncurkan Chrome: {e}", parent=self)
 
     def _sj_open_folder(self):
         """Open ~/Downloads folder."""
@@ -1471,5 +1538,6 @@ class AutoImportApp(tk.Tk):
 
 
 if __name__ == "__main__":
+    print(f"=== {APP_TITLE} — ui_app.py v4.12 (pasangan accurate_bot.py v4.7) ===")
     app = AutoImportApp()
     app.mainloop()
