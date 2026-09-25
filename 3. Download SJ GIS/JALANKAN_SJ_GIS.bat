@@ -1,13 +1,13 @@
 @echo off
 setlocal
 chcp 65001 >nul
-title Download SJ GIS - Pemindahan Barang (DIAGNOSTIC v8.5)
+title Download SJ GIS - Pemindahan Barang (v8.6)
 color 0A
 cls
 echo ============================================================
-echo   DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.5 DIAGNOSTIC)
+echo   DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.6)
 echo ============================================================
-echo  v8.5 DIAGNOSTIC — cetak dump state setelah tiap step kritikal
+echo  v8.6 — fix sanitize (strip newlines) + diagnostic dump Info Lainnya fields
 echo.
 echo  Alur (berdasarkan recording manual user):
 echo    search ^> klik cell ^> detail ^> btnCommentAttachment

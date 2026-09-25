@@ -1,7 +1,30 @@
 """
-download_sj_gis.py  (v8.5 - DIAGNOSTIC)
-=================================
+download_sj_gis.py  (v8.6)
+=========================
 Download Surat Jalan (SJ) dari modul PEMINDAHAN BARANG Accurate Online (database GiS).
+
+PERBAIKAN v8.6 (dari v8.5 DIAGNOSTIC):
+  - TUJUAN: fix RENAME failure. v8.5 run berakhir DOWNLOAD sukses
+    (SJ_DRY_MGM20260924.pdf tersimpan) tapi RENAME gagal 3x karena:
+      (a) extract_cabang_value baca field SALAH — bukan 'Cabang' (code+name spt
+          '1310.GRTSUM'), tapi field STATUS 'Dicetak email\nBelum cetak email'.
+          Hasil: value punya newline (\n) -> filename invalid.
+      (b) sanitize_for_filename cuma strip \\ / : * ? \" < > | — NEWLINE \n \r\n
+          dan control chars (\t, \x00-\x1f) SURVIVE. Value spt
+          'Dicetakemail\nBelum cetakemail' lolot sanitization -> filename invalid
+          -> os.rename gagal 3x -> file tetap pakai nama asli.
+  - FIX 1: sanitize_for_filename kini juga strip control chars
+    ([\x00-\x1f\x7f\\/:*?\"<>|]) + collapse whitespace jadi single space + trim.
+    Titik DIPERTAHANKAN (format cabang spt '1310.GRTSUM' butuh titik utuh).
+  - FIX 2: extract_cabang_value ADD dump_info_lainnya_fields(driver) di awal —
+    dump ALL label+value pairs + element berisi 'Cabang'/'branch' di panel
+    Info Lainnya. Dari dump ini kelihatan DIMANA field Cabang beneran + value-nya,
+    supaya v8.7 bisa tulis selector persis (bukan tebak label sibling).
+  - FIX 2b: extract_cabang_value LOG method yg match (KO observable / input branch /
+    label sibling) + value-nya — supaya kelihatan jalan mana yg salah baca.
+  - Download flow steps 1-7 (search -> cell -> detail -> btnCommentAttachment ->
+    dropdown -> attachment -> download) TIDAK diubah (sudah WORKING di v8.5).
+    Hanya sanitize + extract_cabang_value + dump yg di-touched.
 
 PERBAIKAN v8.5 DIAGNOSTIC (dari v8.4):
   - TUJUAN: versi DIAGNOSTIC buat lihat REAL DOM state. v8.4 'graceful skip'
@@ -944,8 +967,74 @@ return (function(){
 })()
 """
 
+JS_DUMP_INFO_LAINNYA = JS_VIS + """
+return (function(){
+  var out = {fields: []};
+  // Cari semua elemen label/value di Info Lainnya panel.
+  // Accurate forms: label di <label>/<div>/<span>, value di sibling <span>/<div>/<input>
+  // Pattern 1: <div class="input-control..."><label>Cabang</label><input ...> or <div>value</div>
+  // Pattern 2: <div><span>Cabang:</span><span>value</span></div>
+  // Pattern 3: <label>Cabang</label> diikuti text/value
+
+  // Cari semua <label> dan text-nya, plus sibling value
+  var labels = document.querySelectorAll('label, .control-label, [class*="label"]');
+  for (var i=0;i<labels.length && out.fields.length<40;i++){
+    var lbl = labels[i];
+    if (!vis(lbl)) continue;
+    var lt = (lbl.innerText||lbl.textContent||'').trim();
+    if (!lt || lt.length>40) continue;
+    // Cari sibling value: next sibling, atau parent's next child
+    var val = '';
+    var sib = lbl.nextElementSibling;
+    if (sib){
+      val = (sib.innerText||sib.textContent||sib.value||'').trim();
+    }
+    if (!val){
+      // cek parent's next sibling
+      var psib = lbl.parentElement ? lbl.parentElement.nextElementSibling : null;
+      if (psib) val = (psib.innerText||psib.textContent||'').trim();
+    }
+    if (!val){
+      // cek kalau label parent punya input
+      var par = lbl.parentElement;
+      if (par){
+        var inp = par.querySelector('input, select, textarea');
+        if (inp) val = (inp.value||inp.innerText||'').trim();
+      }
+    }
+    out.fields.push({label: lt.slice(0,30), value: val.slice(0,60), labelClass:(lbl.className||'').toString().slice(0,40)});
+  }
+  // Juga cari semua <input> dgn value (field values)
+  var inps = document.querySelectorAll('input[type="text"], input:not([type]), input[readonly], select');
+  for (var j=0;j<inps.length && out.fields.length<60;j++){
+    var inp = inps[j];
+    if (!vis(inp)) continue;
+    var nm = inp.name||'';
+    var val = (inp.value||'').trim();
+    if (val && val.length<60){
+      out.fields.push({label: 'INPUT:'+nm, value: val.slice(0,60), labelClass: (inp.className||'').toString().slice(0,40)});
+    }
+  }
+  // Cari semua div/span berisi "Cabang" (case insensitive)
+  var all = document.querySelectorAll('div, span, li, td');
+  for (var k=0;k<all.length && out.fields.length<80;k++){
+    var el = all[k];
+    if (!vis(el)) continue;
+    var t = (el.innerText||'').trim();
+    if (!t || t.length>80) continue;
+    var low = t.toLowerCase();
+    if (low.indexOf('cabang') !== -1 || low.indexOf('branch') !== -1){
+      out.fields.push({label: 'CONTAINS_CABANG:', value: t.slice(0,70), labelClass:(el.className||'').toString().slice(0,40)});
+    }
+  }
+  return out;
+})();
+"""
+
+
 JS_READ_CABANG = JS_VIS + """
 return (function(){
+  // v8.6: return {value, method} supaya extract_cabang_value bisa log method yg match.
   function getVM(el){
     try { if (window.ko && ko.contextFor) return ko.contextFor(el).$data; } catch(e) {}
     try { if (window.ko && ko.dataFor) return ko.dataFor(el); } catch(e) {}
@@ -961,10 +1050,10 @@ return (function(){
           if (typeof vm.formData.branch === 'function') {
             let b = vm.formData.branch();
             if (b && typeof b === 'object') {
-              if (b.name) return String(b.name).trim();
-              if (b.no)  return String(b.no).trim();
+              if (b.name) return {value: String(b.name).trim(), method: 'KO observable (formData.branch().name)'};
+              if (b.no)  return {value: String(b.no).trim(),  method: 'KO observable (formData.branch().no)'};
             }
-            if (typeof b === 'string' && b) return b.trim();
+            if (typeof b === 'string' && b) return {value: b.trim(), method: 'KO observable (formData.branch() string)'};
           }
           if (typeof vm.formData.branchId === 'function') {
             let bid = vm.formData.branchId();
@@ -975,17 +1064,17 @@ return (function(){
                   for (let i=0;i<opts.length;i++){
                     let o = opts[i] || {};
                     if (o && (o.id === bid || String(o.id) === String(bid))) {
-                      if (o.name) return String(o.name).trim();
+                      if (o.name) return {value: String(o.name).trim(), method: 'KO observable (branchId+branchListOption.name)'};
                     }
                   }
                 }
               } catch(e) {}
-              return String(bid).trim();
+              return {value: String(bid).trim(), method: 'KO observable (branchId fallback)'};
             }
           }
         }
         // 1c. plain input.value (Accurate build sometimes set value langsung)
-        if (inp.value && inp.value.trim()) return inp.value.trim();
+        if (inp.value && inp.value.trim()) return {value: inp.value.trim(), method: 'input branch (input[name=branch].value)'};
       }
     } catch(e) {}
 
@@ -1001,7 +1090,7 @@ return (function(){
         let sib = l.nextElementSibling;
         if (sib) {
           let sv = ((sib.innerText || sib.value || '') + '').trim();
-          if (sv && sv.length < 60 && !/^cabang/i.test(sv)) return sv;
+          if (sv && sv.length < 60 && !/^cabang/i.test(sv)) return {value: sv, method: 'label sibling (nextElementSibling)'};
         }
         let p = l.parentElement;
         if (p) {
@@ -1009,7 +1098,7 @@ return (function(){
           for (let k of kids) {
             if (k === l) continue;
             let kv = ((k.value || k.innerText || '') + '').trim();
-            if (kv && kv.length < 60 && !/^cabang/i.test(kv)) return kv;
+            if (kv && kv.length < 60 && !/^cabang/i.test(kv)) return {value: kv, method: 'label sibling (parent children scan)'};
           }
         }
       }
@@ -1018,7 +1107,7 @@ return (function(){
     // 3. recursive iframe scan (detail form bisa ada di iframe)
     const fr = doc.querySelectorAll('iframe, frame');
     for (let i=0;i<fr.length;i++){
-      try{ const d=fr[i].contentDocument; if(d){ const r=read(d); if(r) return r; } }catch(e){}
+      try{ const d=fr[i].contentDocument; if(d){ const r=read(d); if(r && r.value) return r; } }catch(e){}
     }
     return null;
   }
@@ -1050,36 +1139,96 @@ def click_info_lainnya_tab(driver, timeout=8):
     return False
 
 
+def dump_info_lainnya_fields(driver):
+    """Diagnostic: dump ALL label+value pairs + Cabang-containing elements in Info Lainnya panel.
+    v8.6: kelihatan DIMANA field Cabang beneran + value-nya supaya v8.7 bisa tulis selector persis
+    (bukan tebak label sibling). Dipanggil sekali di awal extract_cabang_value sebelum extraction.
+    """
+    switch_top(driver)
+    try:
+        st = driver.execute_script(JS_DUMP_INFO_LAINNYA)
+    except Exception as e:
+        say(f"    [DUMP ERR] {e}")
+        return
+    if not st or not isinstance(st, dict):
+        tn = type(st).__name__ if st is not None else 'None'
+        say(f"    [DUMP] no output (script returned {tn})")
+        return
+    fields = st.get('fields', []) or []
+    say(f"\n    ===== DUMP: Info Lainnya fields ({len(fields)}) =====")
+    for i, f in enumerate(fields):
+        say(f"      [{i}] label='{f.get('label','')}' value='{f.get('value','')}' class='{f.get('labelClass','')}'")
+    # Highlight any field whose label or value contains 'cabang' or 'branch' (case insensitive)
+    cabang_candidates = [f for f in fields
+                        if 'cabang' in (f.get('label','')+f.get('value','')).lower()
+                        or 'branch' in (f.get('label','')+f.get('value','')).lower()]
+    if cabang_candidates:
+        say(f"      --- CABANG CANDIDATES ({len(cabang_candidates)}) ---")
+        for c in cabang_candidates:
+            say(f"        label='{c.get('label','')}' value='{c.get('value','')}'")
+    else:
+        say(f"      (no field with 'cabang'/'branch' in label or value)")
+    say(f"    ===== END DUMP =====\n")
+
+
 def extract_cabang_value(driver, timeout=10):
-    """Baca value Cabang dari panel 'Info Lainnya'.
+    """Baca value Cabang dari panel 'Info Lainnya'. v8.6: dump fields first + log method matched.
     Return string cabang (e.g. '1310.GRTSUM') atau None.
-    Strategy (urut paling reliable -> fallback):
+    Strategy (urut paling reliable -> fallback, dibungkus JS_READ_CABANG yg return {value, method}):
       1. KO observable vm.formData.branch().name  (pattern accurate_bot.py verify_form_observables)
       2. KO vm.formData.branchId() + lookup acc.staticData.branchListOption() -> .name
       3. input[name='branch'].value (build ada yg set value langsung)
       4. label 'Cabang' + sibling value scan (akomodasi layout non-KO)
       5. recursive iframe scan (detail form bisa ada di iframe)
+    v8.6 DIAGNOSTIC: panggil dump_info_lainnya_fields(driver) di awal supaya kelihatan SEMUA field
+    di panel Info Lainnya — termasuk field STATUS (bukan Cabang) yg sebelumnya kebaca salah
+    akibat label sibling scan greedy. Plus log method yg match + value-nya supaya kelihatan
+    jalan mana yg salah baca.
     """
+    # DIAGNOSTIC: dump all fields first (one-shot snapshot, no retry biar nggak spam output)
+    dump_info_lainnya_fields(driver)
+
+    # Extraction attempt loop (kasih waktu panel render kalau field belum available)
     end = time.time() + timeout
     switch_top(driver)
     while time.time() < end:
         try:
             switch_top(driver)
-            val = driver.execute_script(JS_READ_CABANG)
-            if val and val.strip():
-                return val.strip()
+            res = driver.execute_script(JS_READ_CABANG)
+            # v8.6: JS_READ_CABANG return {value, method} (atau null)
+            if res and isinstance(res, dict):
+                val = (res.get('value') or '').strip()
+                if val:
+                    say(f"    [method={res.get('method','?')}] cabang='{val}'")
+                    return val
+            elif res and isinstance(res, str):
+                # legacy fallback (kalau JS lama belum di-update, return string) — strip + return
+                val = res.strip()
+                if val:
+                    say(f"    [method=legacy string] cabang='{val}'")
+                    return val
         except Exception:
             pass
         time.sleep(0.3)
+    say(f"    [method=none] cabang tidak terbaca setelah {timeout}s -> fallback TanpaCabang")
     return None
 
 
 def sanitize_for_filename(value):
-    """Buang karakter Windows-forbidden utk filename: \\ / : * ? " < > |.
-    Titik DIPERTAHANKAN (format cabang spt '1310.GRTSUM' butuh titik utuh)."""
+    """Buang karakter Windows-forbidden + control chars (newline, tab, dll) utk filename.
+    Titik DIPERTAHANKAN (format cabang spt '1310.GRTSUM' butuh titik utuh).
+    v8.6: sebelumnya cuma strip \\ / : * ? " < > | — NEWLINE \\n \\r dan control chars
+    (\\t, \\x00-\\x1f) SURVIVE, jadi value spt 'Dicetakemail\\nBelum cetakemail' lolot
+    sanitization -> filename invalid -> rename gagal 3x. Sekarang strip control chars
+    juga + collapse whitespace jadi single space + trim."""
     if not value:
         return ""
-    return re.sub(r'[\\/:*?"<>|]', '', str(value)).strip()
+    # Strip control chars (\\x00-\\x1f includes \\n \\r \\t; \\x7f = DEL) + Windows-forbidden chars.
+    # KEEP dots, letters, digits, spaces, dashes, parens, dll.
+    value = re.sub(r'[\x00-\x1f\x7f\\/:*?"<>|]', '', str(value))
+    # Collapse remaining whitespace (multiple spaces) jadi single space, lalu trim.
+    value = re.sub(r'\s+', ' ', value).strip()
+    return value
 
 
 def rename_download_file(original_path, kode, cabang):
@@ -1254,7 +1403,7 @@ def process_one_kode(driver, kode, fr, seq, total):
 
 def main():
     say("=" * 60)
-    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.5 DIAGNOSTIC)")
+    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.6)")
     say("=" * 60)
     say(f"Folder download: {DOWNLOAD_DIR}")
     if not os.path.isdir(DOWNLOAD_DIR):
