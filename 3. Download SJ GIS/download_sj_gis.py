@@ -1,7 +1,21 @@
 """
-download_sj_gis.py  (v8.2 - FINAL)
+download_sj_gis.py  (v8.3 - FINAL)
 =================================
 Download Surat Jalan (SJ) dari modul PEMINDAHAN BARANG Accurate Online (database GiS).
+
+PERBAIKAN v8.3 (dari v8.2):
+  - FEATURE: setelah download selesai, file di-rename jadi
+    {kode}_Tanggal_{cabang}.{ext} (contoh: IT.2026.09.09561_Tanggal_1310.GRTSUM.pdf).
+  - Cabang diekstrak dari tab 'Info Lainnya' di detail form. Flow:
+      (a) tutup attachment overlay dulu (supaya detail form accessible),
+      (b) klik tab 'Info Lainnya' (JS_CLICK_INFO_TAB, reuse pattern dari unduh_xls_loop.py),
+      (c) baca value Cabang via KO observable formData.branch().name (pattern dari
+          accurate_bot.py verify_form_observables) + fallback input.value + label scan,
+      (d) rename file (sanitized: hilangkan \\ / : * ? \" < > |, titik dipertahankan),
+      (e) tutup detail tab.
+  - Fallback 'TanpaCabang' kalau Cabang/tab nggak terbaca (tool tetap jalan + rename).
+  - Download flow lama (search -> cell -> detail -> dropdown -> attachment -> download)
+    TIDAK diubah; rename + cabang extraction cuma ditambah SETELAH download selesai.
 
 PERBAIKAN v8.2 (dari v8.1):
   - CRITICAL FIX: STEP 2 (click cell) kembali pakai JS clickSeq (native MouseEvent dispatch)
@@ -16,7 +30,10 @@ Flow (berdasarkan RECORDER recording user manual — selector PERSIS):
   3. Click i#btnCommentAttachment (icon Komentar/Dokumen di detail toolbar)
   4. Click <a> pertama di dropdown .drop-left → attachment panel kebuka (AJAX attachment.do)
   5. Click i.icon-download-2 di dalam <a> di attachment panel → DOWNLOAD file
-  6. Close attachment overlay (button.btn-close) + close detail tab (i.icon-cancel-2.smaller)
+  6. Tutup attachment overlay (button.btn-close)
+     → klik tab 'Info Lainnya' di detail form → baca Cabang (KO formData.branch().name,
+       e.g. '1310.GRTSUM') → rename file jadi {kode}_Tanggal_{cabang}.{ext}
+     → tutup detail tab (i.icon-cancel-2.smaller)
   7. Loop ke kode berikutnya (kalau ada)
 
 Cara pakai:
@@ -28,6 +45,8 @@ Cara pakai:
        IT.2026.09.19805, IT.2026.09.20451, IT.2026.09.20447
 
 Output: file PDF/XLS tersimpan di folder Downloads (1 file per kode).
+       Nama file: {kode}_Tanggal_{cabang}.{ext}
+         (cabang diekstrak dari tab 'Info Lainnya' detail form; fallback 'TanpaCabang').
 """
 import os
 import sys
@@ -731,6 +750,219 @@ def wait_new_download(before, timeout=90):
     return None
 
 # ============================================================
+# INFO LAINNYA TAB + CABANG EXTRACTION + RENAME FILE (v8.3)
+# ============================================================
+# Reuse pattern dari unduh_xls_loop.py (JS_CLICK_INFO_TAB — proven trigger Info lainnya tab).
+# Cabang value dibaca via KO observable (vm.formData.branch().name) — pattern dari
+# accurate_bot.py verify_form_observables(). Fallback: input.value + label 'Cabang' scan.
+# Rename file ke {kode}_Tanggal_{cabang}.{ext} (sanitized: hilangkan \\ / : * ? " < > |,
+# titik dipertahankan utk format cabang spt '1310.GRTSUM').
+
+JS_CLICK_INFO_TAB = JS_VIS + """
+return (function(){
+  function clickSeq(el){
+    if (!el) return;
+    const init = {bubbles:true, cancelable:true, view:window, button:0, buttons:1};
+    ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(t=>{
+      try{ el.dispatchEvent(new MouseEvent(t, init)); }catch(e){}
+    });
+  }
+  function scan(doc){
+    let el = doc.querySelector('a[title="Info lainnya"], a.left-tab[title="Info lainnya"], .icn-transaction-header');
+    if (el && vis(el)) { clickSeq(el.closest('a') || el); return 'TITLE'; }
+    const nodes = Array.from(doc.querySelectorAll('a, span, div, li, label')).filter(x=>{
+      const t = (x.innerText || x.textContent || '').trim();
+      return t === 'Info lainnya' && vis(x);
+    });
+    if (nodes.length){
+      nodes.sort((a,b)=>(a.innerText||'').length-(b.innerText||'').length);
+      clickSeq(nodes[0]);
+      return 'TEXT';
+    }
+    const fr = doc.querySelectorAll('iframe, frame');
+    for (let i=0;i<fr.length;i++){
+      try{ const d=fr[i].contentDocument; if(d){ const r=scan(d); if(r) return r; } }catch(e){}
+    }
+    return null;
+  }
+  return scan(document);
+})()
+"""
+
+JS_READ_CABANG = JS_VIS + """
+return (function(){
+  function getVM(el){
+    try { if (window.ko && ko.contextFor) return ko.contextFor(el).$data; } catch(e) {}
+    try { if (window.ko && ko.dataFor) return ko.dataFor(el); } catch(e) {}
+    return null;
+  }
+  function read(doc){
+    // 1. KO observable: vm.formData.branch().name  (pattern dari accurate_bot.py)
+    try {
+      let inp = doc.querySelector('input[name="branch"]');
+      if (inp && inp.isConnected && vis(inp)) {
+        let vm = getVM(inp);
+        if (vm && vm.formData) {
+          if (typeof vm.formData.branch === 'function') {
+            let b = vm.formData.branch();
+            if (b && typeof b === 'object') {
+              if (b.name) return String(b.name).trim();
+              if (b.no)  return String(b.no).trim();
+            }
+            if (typeof b === 'string' && b) return b.trim();
+          }
+          if (typeof vm.formData.branchId === 'function') {
+            let bid = vm.formData.branchId();
+            if (bid) {
+              try {
+                if (window.acc && acc.staticData && typeof acc.staticData.branchListOption === 'function') {
+                  let opts = acc.staticData.branchListOption() || [];
+                  for (let i=0;i<opts.length;i++){
+                    let o = opts[i] || {};
+                    if (o && (o.id === bid || String(o.id) === String(bid))) {
+                      if (o.name) return String(o.name).trim();
+                    }
+                  }
+                }
+              } catch(e) {}
+              return String(bid).trim();
+            }
+          }
+        }
+        // 1c. plain input.value (Accurate build sometimes set value langsung)
+        if (inp.value && inp.value.trim()) return inp.value.trim();
+      }
+    } catch(e) {}
+
+    // 2. scan label 'Cabang', baca sibling value
+    try {
+      let labels = Array.from(doc.querySelectorAll('label, .form-label, .control-label, span, div, dt, th'));
+      for (let l of labels) {
+        if (!vis(l)) continue;
+        let t = (l.innerText || l.textContent || '').trim();
+        if (!t || t.length > 30) continue;
+        let up = t.toUpperCase();
+        if (up !== 'CABANG' && !up.startsWith('CABANG')) continue;
+        let sib = l.nextElementSibling;
+        if (sib) {
+          let sv = ((sib.innerText || sib.value || '') + '').trim();
+          if (sv && sv.length < 60 && !/^cabang/i.test(sv)) return sv;
+        }
+        let p = l.parentElement;
+        if (p) {
+          let kids = p.querySelectorAll('span, div, input, select, a, p');
+          for (let k of kids) {
+            if (k === l) continue;
+            let kv = ((k.value || k.innerText || '') + '').trim();
+            if (kv && kv.length < 60 && !/^cabang/i.test(kv)) return kv;
+          }
+        }
+      }
+    } catch(e) {}
+
+    // 3. recursive iframe scan (detail form bisa ada di iframe)
+    const fr = doc.querySelectorAll('iframe, frame');
+    for (let i=0;i<fr.length;i++){
+      try{ const d=fr[i].contentDocument; if(d){ const r=read(d); if(r) return r; } }catch(e){}
+    }
+    return null;
+  }
+  return read(document);
+})()
+"""
+
+
+def click_info_lainnya_tab(driver, timeout=8):
+    """Klik tab 'Info lainnya' di detail form.
+    Return True kalau ketemu & di-klik (atau sudah aktif), False kalau nggak ketemu.
+    Reuse JS_CLICK_INFO_TAB (proven pattern dari unduh_xls_loop.py JS_CLICK_INFO_TAB):
+      - a[title="Info lainnya"], a.left-tab[title="Info lainnya"], .icn-transaction-header
+      - fallback: elements dengan text persis 'Info lainnya'
+      - recursive iframe scan (detail form bisa ada di iframe).
+    """
+    end = time.time() + timeout
+    switch_top(driver)
+    while time.time() < end:
+        try:
+            switch_top(driver)
+            res = driver.execute_script(JS_CLICK_INFO_TAB)
+            if res:  # 'TITLE' or 'TEXT'
+                time.sleep(0.4)  # kasih waktu panel Info Lainnya render field Cabang
+                return True
+        except Exception:
+            pass
+        time.sleep(0.3)
+    return False
+
+
+def extract_cabang_value(driver, timeout=10):
+    """Baca value Cabang dari panel 'Info Lainnya'.
+    Return string cabang (e.g. '1310.GRTSUM') atau None.
+    Strategy (urut paling reliable -> fallback):
+      1. KO observable vm.formData.branch().name  (pattern accurate_bot.py verify_form_observables)
+      2. KO vm.formData.branchId() + lookup acc.staticData.branchListOption() -> .name
+      3. input[name='branch'].value (build ada yg set value langsung)
+      4. label 'Cabang' + sibling value scan (akomodasi layout non-KO)
+      5. recursive iframe scan (detail form bisa ada di iframe)
+    """
+    end = time.time() + timeout
+    switch_top(driver)
+    while time.time() < end:
+        try:
+            switch_top(driver)
+            val = driver.execute_script(JS_READ_CABANG)
+            if val and val.strip():
+                return val.strip()
+        except Exception:
+            pass
+        time.sleep(0.3)
+    return None
+
+
+def sanitize_for_filename(value):
+    """Buang karakter Windows-forbidden utk filename: \\ / : * ? " < > |.
+    Titik DIPERTAHANKAN (format cabang spt '1310.GRTSUM' butuh titik utuh)."""
+    if not value:
+        return ""
+    return re.sub(r'[\\/:*?"<>|]', '', str(value)).strip()
+
+
+def rename_download_file(original_path, kode, cabang):
+    """Rename file ke {kode}_Tanggal_{cabang}.{ext}.
+    - ext = os.path.splitext(original_path)[1]  (pertahankan .pdf / .xls / .xlsx asli)
+    - cabang None/empty/unsanitizable -> fallback 'TanpaCabang'
+    - Retry rename 3x (0.5s) utk antisipasi file masih locked Chrome sesaat setelah download
+    - Kalau target sudah ada, tambahkan suffix _1, _2, dst biar nggak overwrite
+    - Return path baru, atau path asli kalau rename gagal (file tetap ada, cuma nggak ke-rename)
+    """
+    if not original_path or not os.path.exists(original_path):
+        return original_path
+    ext = os.path.splitext(original_path)[1]
+    safe_cabang = sanitize_for_filename(cabang) if cabang else ""
+    if not safe_cabang:
+        safe_cabang = "TanpaCabang"
+    new_name = f"{kode}_Tanggal_{safe_cabang}{ext}"
+    folder = os.path.dirname(original_path)
+    new_path = os.path.join(folder, new_name)
+    # Kalau target sudah ada, tambah suffix _1, _2, dst biar nggak overwrite
+    if os.path.exists(new_path):
+        i = 1
+        while os.path.exists(new_path):
+            new_path = os.path.join(folder, f"{kode}_Tanggal_{safe_cabang}_{i}{ext}")
+            i += 1
+    # Retry rename 3x (file mungkin masih locked oleh Chrome sesaat setelah download selesai)
+    for attempt in range(3):
+        try:
+            os.rename(original_path, new_path)
+            return new_path
+        except OSError:
+            time.sleep(0.5)
+    # Kalau rename gagal 3x, kembalikan path asli (file tetap ada, cuma nggak ke-rename)
+    say(f"    [WARNING] Rename gagal 3x (file locked?). Pakai nama asli: {os.path.basename(original_path)}")
+    return original_path
+
+
+# ============================================================
 # MAIN — proses 1 atau lebih kode (loop)
 # ============================================================
 def process_one_kode(driver, kode, fr, seq, total):
@@ -739,7 +971,7 @@ def process_one_kode(driver, kode, fr, seq, total):
     say(f"\n[{seq}/{total}] Kode: {kode}")
     try:
         # 1. Search
-        say(f"  [1/7] Search kode...")
+        say(f"  [1/8] Search kode...")
         if not search_kode(driver, kode, fr):
             say(f"  [ERROR] Kode tidak ditemukan di grid setelah search.")
             say(f"  (Mungkin kode bukan transaksi tanggal hari ini — cek filter date)")
@@ -747,7 +979,7 @@ def process_one_kode(driver, kode, fr, seq, total):
         say(f"  [OK] Kode ditemukan di grid.")
 
         # 2. Single-click cell → detail
-        say(f"  [2/7] Single-click cell (buka detail)...")
+        say(f"  [2/8] Single-click cell (buka detail)...")
         how = click_cell_open_detail(driver, fr, kode)
         if not how:
             say(f"  [ERROR] Cell tidak bisa di-klik.")
@@ -757,7 +989,7 @@ def process_one_kode(driver, kode, fr, seq, total):
             say(f"  [WARNING] Detail tidak terdeteksi, tapi lanjut cari btnCommentAttachment.")
 
         # 3. Click i#btnCommentAttachment
-        say(f"  [3/7] Klik i#btnCommentAttachment (Komentar/Dokumen)...")
+        say(f"  [3/8] Klik i#btnCommentAttachment (Komentar/Dokumen)...")
         how = click_comment_attachment(driver)
         if not how:
             say(f"  [ERROR] i#btnCommentAttachment tidak ditemukan.")
@@ -767,7 +999,7 @@ def process_one_kode(driver, kode, fr, seq, total):
         say(f"  [OK] btnCommentAttachment diklik via {how}. Tunggu dropdown...")
 
         # 4. Click first <a> di dropdown
-        say(f"  [4/7] Klik <a> pertama di dropdown (buka attachment panel)...")
+        say(f"  [4/8] Klik <a> pertama di dropdown (buka attachment panel)...")
         how = click_first_dropdown_item(driver, timeout=8)
         if not how:
             say(f"  [ERROR] Dropdown item tidak ditemukan.")
@@ -784,12 +1016,12 @@ def process_one_kode(driver, kode, fr, seq, total):
             return False, "E_NAVIGATED_AWAY"
 
         # 5. Wait attachment panel
-        say(f"  [5/7] Tunggu attachment panel...")
+        say(f"  [5/8] Tunggu attachment panel...")
         if not wait_attachment_panel(driver, timeout=15):
             say(f"  [WARNING] Attachment panel tidak terdeteksi. Tetap coba cari download icon.")
 
         # 6. Click icon-download-2 → download
-        say(f"  [6/7] Klik i.icon-download-2 (download file)...")
+        say(f"  [6/8] Klik i.icon-download-2 (download file)...")
         before = snapshot_downloads()
         how = click_download_icon(driver, timeout=10)
         if not how:
@@ -800,6 +1032,7 @@ def process_one_kode(driver, kode, fr, seq, total):
         say(f"  [OK] Download icon diklik via {how}. Tunggu file (maks 90s)...")
 
         # 7. Wait file
+        say(f"  [7/8] Tunggu file tersimpan (maks 90s)...")
         fname = wait_new_download(before, timeout=90)
         if not fname:
             say(f"  [ERROR] Download tidak selesai 90s. Cek manual: {DOWNLOAD_DIR}")
@@ -808,9 +1041,34 @@ def process_one_kode(driver, kode, fr, seq, total):
         final = os.path.join(DOWNLOAD_DIR, fname)
         say(f"  [OK] File tersimpan: {final}")
 
-        # Cleanup
-        say(f"  [7/7] Tutup overlay + tab detail...")
+        # 7.5 Tutup attachment overlay DULU (supaya detail form accessible utk tab 'Info Lainnya').
+        #     Tab 'Info Lainnya' ada di detail form (BUKAN di attachment overlay), jadi overlay
+        #     harus ditutup dulu sebelum klik tab. (v8.3 — lihat catatan STEP 6 di docstring.)
+        say(f"  [7.5/8] Tutup attachment overlay (buka akses ke detail form)...")
         close_attachment_overlay(driver, timeout=5)
+
+        # 7.6 Klik tab 'Info Lainnya' + extract Cabang (v8.3)
+        say(f"  [7.6/8] Klik tab 'Info Lainnya' + extract Cabang...")
+        if click_info_lainnya_tab(driver, timeout=8):
+            cabang = extract_cabang_value(driver, timeout=10)
+            if cabang:
+                cabang = sanitize_for_filename(cabang)
+                say(f"    [OK] Cabang: {cabang}")
+            else:
+                cabang = "TanpaCabang"
+                say(f"    [WARNING] Cabang tidak terbaca, pakai fallback: {cabang}")
+        else:
+            cabang = "TanpaCabang"
+            say(f"    [WARNING] Tab 'Info Lainnya' tidak ditemukan, pakai fallback: {cabang}")
+
+        # 7.7 Rename file: {kode}_Tanggal_{cabang}.{ext}
+        say(f"  [7.7/8] Rename file: {kode}_Tanggal_{cabang}{os.path.splitext(final)[1]}...")
+        final = rename_download_file(final, kode, cabang)
+        fname = os.path.basename(final)
+        say(f"    [OK] File renamed: {fname}")
+
+        # 8. Tutup tab detail
+        say(f"  [8/8] Tutup tab detail...")
         close_detail_tab(driver, kode, timeout=5)
         time.sleep(1)
 
@@ -826,7 +1084,7 @@ def process_one_kode(driver, kode, fr, seq, total):
 
 def main():
     say("=" * 60)
-    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.2 FINAL)")
+    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.3 FINAL)")
     say("=" * 60)
     say(f"Folder download: {DOWNLOAD_DIR}")
     if not os.path.isdir(DOWNLOAD_DIR):
