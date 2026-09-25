@@ -1,5 +1,5 @@
 """
-download_sj_gis.py  (v8.9)
+download_sj_gis.py  (v8.10)
 =========================
 Download Surat Jalan (SJ) dari modul PEMINDAHAN BARANG Accurate Online (database GiS).
 
@@ -1478,18 +1478,6 @@ def process_one_kode(driver, kode, fr, seq, total):
             return False, "E_DROPDOWN"
         say(f"  [OK] Dropdown item diklik via {how}. Tunggu attachment panel...")
 
-        # 4.5 DIAGNOSTIC DUMP (v8.5) — lihat state attachment panel SETELAH klik dropdown <a>.
-        #     Ini nunjukin apakah dropdown <a> click benar2 buka attachment panel (panel ada + visible?).
-        dump_dropdown_state(driver, "AFTER click dropdown <a> (step 4.5)")
-
-        # 4.6 SAFETY CHECK: pastikan nggak ke-navigation ke Dashboard
-        time.sleep(1)
-        if not verify_still_on_detail(driver, kode):
-            say(f"  [ERROR] Halaman berubah (ke Dashboard?) setelah klik dropdown.")
-            say(f"  Ini berarti dropdown click kena link salah. Abort + recover.")
-            recover_to_list(driver, kode)
-            return False, "E_NAVIGATED_AWAY"
-
         # 5. Wait attachment panel
         say(f"  [5/8] Tunggu attachment panel...")
         if not wait_attachment_panel(driver, timeout=15):
@@ -1592,7 +1580,7 @@ def process_one_kode(driver, kode, fr, seq, total):
 
 def main():
     say("=" * 60)
-    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.9)")
+    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.10)")
     say("=" * 60)
     say(f"Folder download: {DOWNLOAD_DIR}")
     if not os.path.isdir(DOWNLOAD_DIR):
