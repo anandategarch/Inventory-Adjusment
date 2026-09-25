@@ -1,7 +1,42 @@
 """
-download_sj_gis.py  (v8.6)
+download_sj_gis.py  (v8.7)
 =========================
 Download Surat Jalan (SJ) dari modul PEMINDAHAN BARANG Accurate Online (database GiS).
+
+PERBAIKAN v8.7 (dari v8.6):
+  - TUJUAN: fix 3 bug dari v8.6 run (3 kodes: 19805, 20451, 20447).
+  - BUG A (19805 FAIL E_DROPDOWN): step 3.5 dump_dropdown_state dipanggil SETELAH
+    click_comment_attachment, SEBELUM step 4. Dump itu switch_top(driver) +
+    driver.execute_script(...) — focus shift ini bikin Accurate dropdown AUTO-CLOSE
+    utk beberapa kode. Saat step 4 cek baseline (JS_COUNT_DROPLEFT), dropdown udah
+    hilang (0 visible) → E_DROPDOWN. v8.6 dump step 3.5 nunjukin dropdown visible,
+    tapi step 4 baseline 0 = dropdown ke-close antara dump dan step 4.
+    FIX: HAPUS step 3.5 dump call dari process_one_kode. Diagnostic purpose udah
+    terlayani (kita tau dropdown structure). Step 4.5 dump (after dropdown <a>
+    click) DIPERTAHANKAN — harmless krn jalan SETELAH click.
+  - BUG B (20451 wrong rename '_Tanggal_Tanggal.pdf'): extract_cabang_value baca
+    field SALAH — JS_READ_CABANG label-sibling pakai 'parent children scan' (greedy,
+    ambil sibling pertama non-empty = 'Tanggal') + match startsWith('CABANG') (ke-match
+    'Cabang:' / 'Cabang Pengirim'). Padahal dump JS_DUMP_INFO_LAINNYA CORRECTLY nemu
+    [15] label='Cabang' value='1287.CBIWAR' class='indent-1 required' via
+    lbl.nextElementSibling innerText.
+    FIX: rewrite JS_READ_CABANG label-sibling PERSIS kayak dump — querySelectorAll
+    'label, .control-label, [class*="label"]', EXACT match (lt.toUpperCase()==='CABANG',
+    bukan contains/startsWith — hindari 'Cabang:' / 'Cabang Pengirim'), baca
+    nextElementSibling innerText/textContent/value (sama kayak dump). Fallback:
+    parentElement.nextElementSibling innerText, lalu parent input value. Jadi PRIMARY
+    method (sebelum KO observable + input[name=branch] fallback). extract_cabang_value
+    udah log method yg match — kelihatan jalan mana yg kepake.
+  - BUG C (20447 FAIL E_SEARCH state pollution): setelah 20451, detail tab mungkin nggak
+    ke-close dgn benar → list view nggak accessible → search box input[name=keyword]
+    nggak ketemu → E_SEARCH.
+    FIX: tambah recover_to_list_view(driver) — tutup attachment overlay + tutup SEMUA
+    detail tab (cari i.icon-cancel-2.smaller visible + klik satu2, NGGAK butuh kode)
+    + klik button[name='btnToggleList'] (PROVEN trigger search-item-transfer.do =
+    list refresh, dari recording). Dipanggil di AWAL process_one_kode (step 0/8) utk
+    ensure clean state tiap kode. Cegah state pollution dari kode sebelumnya.
+  - Download flow steps 1-7 TIDAK diubah (sudah WORKING). Hanya: hapus 3.5 dump,
+    rewrite JS_READ_CABANG label-sibling, + tambah recover_to_list_view.
 
 PERBAIKAN v8.6 (dari v8.5 DIAGNOSTIC):
   - TUJUAN: fix RENAME failure. v8.5 run berakhir DOWNLOAD sukses
@@ -901,6 +936,63 @@ def recover_to_list(driver, kode):
             time.sleep(1)
     except: pass
 
+def recover_to_list_view(driver, timeout=5):
+    """v8.7: Recovery di AWAL tiap kode iteration buat clear state pollution dari kode
+    sebelumnya. Cegah E_SEARCH bug (20447 gagal 'search box tidak ditemukan' karena detail
+    tab 20451 nggak ke-close → list view nggak accessible → input[name=keyword] hidden).
+
+    Beda dgn recover_to_list(driver, kode): fungsi ini NGGAK butuh kode (cari SEMUA
+    i.icon-cancel-2.smaller visible + klik) — dipanggil SEBELUM kode ini mulai diproses,
+    jadi kita nggak tahu kode tab yg kebuka (itu kode sebelumnya). Tujuan: balik ke list
+    view bersih, NGGAK peduli tab apa yg kebuka.
+
+    Steps:
+      1. close_attachment_overlay (kalau ada overlay attachment yg masih kebuka).
+      2. Tutup SEMUA detail tab — cari i.icon-cancel-2.smaller visible + klik satu2
+         (loop: re-find tiap habis 1 click biar nggak stale). Stop kalau nggak ada lg.
+      3. Klik button[name='btnToggleList'] — PROVEN way buat balik ke list view
+         (recording: klik btnToggleList trigger search-item-transfer.do = list refresh).
+      4. Wait 1.5s buat list render (search box input[name=keyword] muncul).
+    Return True kalau ada tab/overlay yg ditutup, False kalau state udah bersih.
+    """
+    closed_any = False
+    # 1. Tutup attachment overlay (kalau ada)
+    if close_attachment_overlay(driver, timeout=2):
+        closed_any = True
+        time.sleep(0.4)
+    # 2. Tutup SEMUA detail tab — cari i.icon-cancel-2.smaller visible, klik satu2.
+    #    Loop: re-find tiap habis 1 click (avoid stale element ref). Max `timeout`s.
+    end_tabs = time.time() + timeout
+    while time.time() < end_tabs:
+        switch_top(driver)
+        clicked_one = False
+        try:
+            btns = driver.find_elements(By.CSS_SELECTOR, "i.icon-cancel-2.smaller")
+            for btn in btns:
+                try:
+                    if btn.is_displayed():
+                        smart_click(driver, btn)
+                        clicked_one = True
+                        closed_any = True
+                        time.sleep(0.5)  # kasih waktu tab close + DOM settle
+                        break  # re-find setelah 1 click (avoid stale)
+                except: continue
+        except: pass
+        if not clicked_one:
+            break  # no more visible close buttons → done
+    # 3. Klik btnToggleList — PROVEN way to show list view (trigger search-item-transfer.do)
+    try:
+        switch_top(driver)
+        btn = driver.find_element(By.CSS_SELECTOR, "button[name='btnToggleList']")
+        if btn:
+            try:
+                if btn.is_displayed():
+                    smart_click(driver, btn)
+            except: smart_click(driver, btn)
+            time.sleep(1.5)  # wait list render (input[name=keyword] muncul)
+    except: pass
+    return closed_any
+
 # ============================================================
 # DOWNLOAD WAIT
 # ============================================================
@@ -1034,14 +1126,56 @@ return (function(){
 
 JS_READ_CABANG = JS_VIS + """
 return (function(){
-  // v8.6: return {value, method} supaya extract_cabang_value bisa log method yg match.
+  // v8.7: label-sibling (EXACT "Cabang" + nextElementSibling) jadi PRIMARY method.
+  //       PROVEN dari dump JS_DUMP_INFO_LAINNYA yg nemu [15] label='Cabang' value='1287.CBIWAR'.
+  //       v8.6 salah baca 'Tanggal' karena label-sibling pakai 'parent children scan' (greedy)
+  //       + match pakai startsWith('CABANG') (ke-match 'Cabang:' dll). v8.7: EXACT match +
+  //       nextElementSibling (sama persis kayak dump). KO observable + input[name=branch] jadi
+  //       fallback. return {value, method} supaya extract_cabang_value bisa log method yg match.
   function getVM(el){
     try { if (window.ko && ko.contextFor) return ko.contextFor(el).$data; } catch(e) {}
     try { if (window.ko && ko.dataFor) return ko.dataFor(el); } catch(e) {}
     return null;
   }
   function read(doc){
-    // 1. KO observable: vm.formData.branch().name  (pattern dari accurate_bot.py)
+    // 1. PRIMARY (v8.7): label-sibling — EXACT "Cabang" label + nextElementSibling value.
+    //    PROVEN dari JS_DUMP_INFO_LAINNYA: dump nemu [15] label='Cabang' value='1287.CBIWAR'
+    //    class='indent-1 required' via lbl.nextElementSibling innerText. v8.6 salah karena
+    //    pakai 'parent children scan' (greedy, ambil sibling pertama yg non-empty = 'Tanggal').
+    //    v8.7: EXACT match (case-insensitive, bukan contains/startsWith — hindari 'Cabang:' /
+    //    'Cabang Pengirim') + baca nextElementSibling innerText/textContent/value persis kayak
+    //    dump. Fallback: parentElement.nextElementSibling innerText, lalu parent input value.
+    try {
+      let labels = Array.from(doc.querySelectorAll('label, .control-label, [class*="label"]'));
+      for (let lbl of labels) {
+        if (!vis(lbl)) continue;
+        let lt = (lbl.innerText || lbl.textContent || '').trim();
+        if (!lt) continue;
+        if (lt.toUpperCase() !== 'CABANG') continue;  // EXACT match only (hindari 'Cabang:' / 'Cabang Pengirim')
+        let val = '';
+        // a. nextElementSibling innerText/textContent/value (SAME as dump)
+        let sib = lbl.nextElementSibling;
+        if (sib) {
+          val = ((sib.innerText || sib.textContent || sib.value || '') + '').trim();
+        }
+        // b. parentElement.nextElementSibling innerText/textContent (SAME as dump fallback)
+        if (!val) {
+          let psib = lbl.parentElement ? lbl.parentElement.nextElementSibling : null;
+          if (psib) val = ((psib.innerText || psib.textContent || '') + '').trim();
+        }
+        // c. parent input/select/textarea value (SAME as dump fallback)
+        if (!val) {
+          let par = lbl.parentElement;
+          if (par) {
+            let inp = par.querySelector('input, select, textarea');
+            if (inp) val = ((inp.value || inp.innerText || '') + '').trim();
+          }
+        }
+        if (val && val.length < 60) return {value: val, method: 'label sibling (exact "Cabang" + nextElementSibling)'};
+      }
+    } catch(e) {}
+
+    // 2. FALLBACK: KO observable vm.formData.branch().name  (pattern dari accurate_bot.py)
     try {
       let inp = doc.querySelector('input[name="branch"]');
       if (inp && inp.isConnected && vis(inp)) {
@@ -1073,34 +1207,8 @@ return (function(){
             }
           }
         }
-        // 1c. plain input.value (Accurate build sometimes set value langsung)
+        // 2c. plain input.value (Accurate build sometimes set value langsung)
         if (inp.value && inp.value.trim()) return {value: inp.value.trim(), method: 'input branch (input[name=branch].value)'};
-      }
-    } catch(e) {}
-
-    // 2. scan label 'Cabang', baca sibling value
-    try {
-      let labels = Array.from(doc.querySelectorAll('label, .form-label, .control-label, span, div, dt, th'));
-      for (let l of labels) {
-        if (!vis(l)) continue;
-        let t = (l.innerText || l.textContent || '').trim();
-        if (!t || t.length > 30) continue;
-        let up = t.toUpperCase();
-        if (up !== 'CABANG' && !up.startsWith('CABANG')) continue;
-        let sib = l.nextElementSibling;
-        if (sib) {
-          let sv = ((sib.innerText || sib.value || '') + '').trim();
-          if (sv && sv.length < 60 && !/^cabang/i.test(sv)) return {value: sv, method: 'label sibling (nextElementSibling)'};
-        }
-        let p = l.parentElement;
-        if (p) {
-          let kids = p.querySelectorAll('span, div, input, select, a, p');
-          for (let k of kids) {
-            if (k === l) continue;
-            let kv = ((k.value || k.innerText || '') + '').trim();
-            if (kv && kv.length < 60 && !/^cabang/i.test(kv)) return {value: kv, method: 'label sibling (parent children scan)'};
-          }
-        }
       }
     } catch(e) {}
 
@@ -1274,6 +1382,18 @@ def process_one_kode(driver, kode, fr, seq, total):
     t0 = time.time()
     say(f"\n[{seq}/{total}] Kode: {kode}")
     try:
+        # 0. v8.7: Recover to list view — clear state pollution dari kode sebelumnya.
+        #    Cegah E_SEARCH bug (20447 gagal 'search box tidak ditemukan' karena detail
+        #    tab 20451 nggak ke-close → list view nggak accessible → input[name=keyword]
+        #    hidden). Tutup overlay + tutup SEMUA detail tab + klik btnToggleList (proven
+        #    trigger search-item-transfer.do = list refresh).
+        say(f"  [0/8] Recover to list view (clear state pollution dari kode sebelumnya)...")
+        recover_to_list_view(driver, timeout=5)
+        # re-find frame list (mungkin berubah setelah btnToggleList click — list frame ke-refresh)
+        fr_now = find_list_frame(driver, timeout=8)
+        if fr_now:
+            fr = fr_now
+            say(f"  [OK] Frame list di-refresh: {fr}")
         # 1. Search
         say(f"  [1/8] Search kode...")
         if not search_kode(driver, kode, fr):
@@ -1302,22 +1422,17 @@ def process_one_kode(driver, kode, fr, seq, total):
             return False, "E_BTN_COMMENT"
         say(f"  [OK] btnCommentAttachment diklik via {how}. Tunggu dropdown...")
 
-        # 3.5 DIAGNOSTIC DUMP (v8.5) — lihat state ul.drop-left SETELAH klik btnCommentAttachment.
-        #     Ini nunjukin apakah btnCommentAttachment click benar2 buka dropdown (berapa ul.drop-left
-        #     visible, itemnya apa). Kunci buat diagnose "dropdown nggak muncul" bug.
-        dump_dropdown_state(driver, "AFTER click btnCommentAttachment (step 3.5)")
-
         # 4. Click first <a> di dropdown
         say(f"  [4/8] Klik <a> pertama di dropdown (buka attachment panel)...")
         how = click_first_dropdown_item(driver, timeout=8)
         if not how:
             # v8.5 DIAGNOSTIC: jangan SKIP dibilang "no document" — itu MASKS bug.
             # Kita nggak tahu apakah dokumen ada sampe bisa detect dropdown dgn reliable.
-            # Dump di step 3.5 udah nunjukin state sebenarnya. Fail dgn E_DROPDOWN.
+            # Fail dgn E_DROPDOWN. (v8.7: step 3.5 dump dihapus — switch_top+execute_script
+            # di dump bikin dropdown auto-close. Jadi nggak ada dump utk lihat lagi.)
             say(f"  [ERROR] Dropdown tidak ditemukan setelah btnCommentAttachment (8s wait).")
-            say(f"  LIHAT DUMP step 3.5 di atas — itu nunjukin state sebenarnya.")
-            say(f"  Kalau di dump ada ul.drop-left visible dgn <a> items = dropdown kebuka tapi tool nggak nemu (visibility bug).")
-            say(f"  Kalau di dump 0 ul.drop-left = klik btnCommentAttachment nggak trigger dropdown.")
+            say(f"  Kemungkinan: (a) SJ ini TANPA dokumen (dropdown emang nggak muncul),")
+            say(f"  atau (b) btnCommentAttachment click nggak trigger jQuery dropdown handler.")
             recover_to_list(driver, kode)
             return False, "E_DROPDOWN"
         say(f"  [OK] Dropdown item diklik via {how}. Tunggu attachment panel...")
@@ -1403,7 +1518,7 @@ def process_one_kode(driver, kode, fr, seq, total):
 
 def main():
     say("=" * 60)
-    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.6)")
+    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.7)")
     say("=" * 60)
     say(f"Folder download: {DOWNLOAD_DIR}")
     if not os.path.isdir(DOWNLOAD_DIR):
