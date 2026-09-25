@@ -1,13 +1,13 @@
 @echo off
 setlocal
 chcp 65001 >nul
-title Download SJ GIS - Pemindahan Barang (v8.7)
+title Download SJ GIS - Pemindahan Barang (v8.8)
 color 0A
 cls
 echo ============================================================
-echo   DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.7)
+echo   DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.8)
 echo ============================================================
-echo  v8.7 — fix 3 bugs: remove 3.5 dump (closes dropdown) + Cabang exact-label + list-view recovery
+echo  v8.8 — remove harmful recover_to_list_view (btnToggleList is TOGGLE) + verify close_detail_tab + wait search box
 echo.
 echo  Alur (berdasarkan recording manual user):
 echo    search ^> klik cell ^> detail ^> btnCommentAttachment

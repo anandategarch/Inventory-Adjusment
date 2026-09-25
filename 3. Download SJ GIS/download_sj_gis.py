@@ -1,7 +1,28 @@
 """
-download_sj_gis.py  (v8.7)
+download_sj_gis.py  (v8.8)
 =========================
 Download Surat Jalan (SJ) dari modul PEMINDAHAN BARANG Accurate Online (database GiS).
+
+PERBAIKAN v8.8 (dari v8.7):
+  - USER CONFIRMED (no more assumptions):
+    1. btnToggleList adalah TOGGLE (sekali klik buka list, sekali lg tutup list).
+       BUKAN "always show list". v8.7 recover_to_list_view klik btnToggleList di AWAL
+       tiap kode iteration, tapi page SUDAH di list view -> klik itu MENUTUP list ->
+       search box hidden -> E_SEARCH utk SEMUA kode. Ini WRONG assumption.
+    2. Setelah close detail tab (klik X), page OTOMATIS balik ke list view (dgn
+       loading delay). Nggak perlu klik apa2.
+    3. Saat tool mulai (kode pertama), page SUDAH di list view. Nggak butuh
+       recovery action utk kode 1.
+  - FIX 1: HAPUS recover_to_list_view ENTIRELY (function definition + step 0/8 call
+    di process_one_kode + fr re-find after it). Download flow steps 1-8 unchanged.
+  - FIX 2: close_detail_tab REWRITE dgn VERIFY + RETRY. Klik i.icon-cancel-2.smaller
+    SEKALI nggak tentu langsung close (user confirm: ada loading setelah close).
+    Loop max 3x: klik X -> tunggu 1.5s (loading) -> verify (elemen berisi kode nggak
+    ada + JS_DETAIL_OPEN false) -> kalau masih ada, retry. Return True kalau tab
+    beneran gone, False kalau 3x retry masih ada.
+  - FIX 3: SETELAH close_detail_tab (step 8), ADD step 8.5: wait input[name=keyword]
+    visible (max 10s) = list view ready marker. Ensures next kode's search finds box.
+  - FIX 4: main() loop jeda 2s -> 1s (search box wait di 8.5 handles the loading).
 
 PERBAIKAN v8.7 (dari v8.6):
   - TUJUAN: fix 3 bug dari v8.6 run (3 kodes: 19805, 20451, 20447).
@@ -896,32 +917,43 @@ def verify_still_on_detail(driver, kode):
     except:
         return False
 
-def close_detail_tab(driver, kode, timeout=5):
-    """Tutup tab detail (klik i.icon-cancel-2.smaller di tab berisi kode)."""
-    end = time.time() + timeout
-    while time.time() < end:
+def close_detail_tab(driver, kode, timeout=10):
+    """Tutup tab detail (klik X i.icon-cancel-2.smaller di tab berisi kode).
+    v8.8: VERIFY tab beneran hilang. Retry klik X max 3x. User confirm: ada loading
+    setelah close, jadi perlu cek tab beneran gone sebelum return."""
+    for attempt in range(3):
         switch_top(driver)
         try:
             cl = driver.execute_script(JS_MARK_CLOSE, kode)
-            if cl:
-                el = find_marked(driver, cl["path"], timeout=2)
-                if el:
-                    smart_click(driver, el)
-                    clear_mark(driver, cl["path"])
+            if not cl:
+                # tab udah nggak ada (berisi kode) -> sudah close
+                return True
+            el = find_marked(driver, cl["path"], timeout=3)
+            if el:
+                smart_click(driver, el)
+                clear_mark(driver, cl["path"])
+                say(f"  [close_detail_tab] attempt {attempt+1}: klik X, tunggu loading...")
+                time.sleep(1.5)  # user confirm: ada loading setelah close
+            else:
+                clear_mark(driver, cl["path"])
+                # cek lagi apakah tab masih ada
+                cl2 = driver.execute_script(JS_MARK_CLOSE, kode)
+                if not cl2:
                     return True
-        except: pass
-        # Fallback: cari i.icon-cancel-2.smaller visible
+        except Exception as e:
+            say(f"  [close_detail_tab] attempt {attempt+1} error: {e}")
+        # verify: cek tab (elemen berisi kode) masih ada?
+        switch_top(driver)
+        still_open = driver.execute_script(JS_DETAIL_OPEN, kode)  # JS_DETAIL_OPEN cek input value=kode / #btnCommentAttachment
+        # also check: is the kode still in a tab element?
         try:
-            btns = driver.find_elements(By.CSS_SELECTOR, "i.icon-cancel-2.smaller")
-            for btn in btns:
-                try:
-                    if btn.is_displayed():
-                        smart_click(driver, btn)
-                        return True
-                except: continue
-        except: pass
-        time.sleep(0.4)
-    return False
+            tabs = driver.find_elements(By.CSS_SELECTOR, "div.module-tab, div.form-tab-title")
+            kode_in_tab = any(kode in (t.text or "") for t in tabs if t.is_displayed())
+        except:
+            kode_in_tab = False
+        if not kode_in_tab and not still_open:
+            return True  # tab beneran gone
+    return False  # 3x retry masih ada
 
 def recover_to_list(driver, kode):
     """Cleanup buat recovery ke list view: tutup overlay + tab detail."""
@@ -936,62 +968,7 @@ def recover_to_list(driver, kode):
             time.sleep(1)
     except: pass
 
-def recover_to_list_view(driver, timeout=5):
-    """v8.7: Recovery di AWAL tiap kode iteration buat clear state pollution dari kode
-    sebelumnya. Cegah E_SEARCH bug (20447 gagal 'search box tidak ditemukan' karena detail
-    tab 20451 nggak ke-close → list view nggak accessible → input[name=keyword] hidden).
 
-    Beda dgn recover_to_list(driver, kode): fungsi ini NGGAK butuh kode (cari SEMUA
-    i.icon-cancel-2.smaller visible + klik) — dipanggil SEBELUM kode ini mulai diproses,
-    jadi kita nggak tahu kode tab yg kebuka (itu kode sebelumnya). Tujuan: balik ke list
-    view bersih, NGGAK peduli tab apa yg kebuka.
-
-    Steps:
-      1. close_attachment_overlay (kalau ada overlay attachment yg masih kebuka).
-      2. Tutup SEMUA detail tab — cari i.icon-cancel-2.smaller visible + klik satu2
-         (loop: re-find tiap habis 1 click biar nggak stale). Stop kalau nggak ada lg.
-      3. Klik button[name='btnToggleList'] — PROVEN way buat balik ke list view
-         (recording: klik btnToggleList trigger search-item-transfer.do = list refresh).
-      4. Wait 1.5s buat list render (search box input[name=keyword] muncul).
-    Return True kalau ada tab/overlay yg ditutup, False kalau state udah bersih.
-    """
-    closed_any = False
-    # 1. Tutup attachment overlay (kalau ada)
-    if close_attachment_overlay(driver, timeout=2):
-        closed_any = True
-        time.sleep(0.4)
-    # 2. Tutup SEMUA detail tab — cari i.icon-cancel-2.smaller visible, klik satu2.
-    #    Loop: re-find tiap habis 1 click (avoid stale element ref). Max `timeout`s.
-    end_tabs = time.time() + timeout
-    while time.time() < end_tabs:
-        switch_top(driver)
-        clicked_one = False
-        try:
-            btns = driver.find_elements(By.CSS_SELECTOR, "i.icon-cancel-2.smaller")
-            for btn in btns:
-                try:
-                    if btn.is_displayed():
-                        smart_click(driver, btn)
-                        clicked_one = True
-                        closed_any = True
-                        time.sleep(0.5)  # kasih waktu tab close + DOM settle
-                        break  # re-find setelah 1 click (avoid stale)
-                except: continue
-        except: pass
-        if not clicked_one:
-            break  # no more visible close buttons → done
-    # 3. Klik btnToggleList — PROVEN way to show list view (trigger search-item-transfer.do)
-    try:
-        switch_top(driver)
-        btn = driver.find_element(By.CSS_SELECTOR, "button[name='btnToggleList']")
-        if btn:
-            try:
-                if btn.is_displayed():
-                    smart_click(driver, btn)
-            except: smart_click(driver, btn)
-            time.sleep(1.5)  # wait list render (input[name=keyword] muncul)
-    except: pass
-    return closed_any
 
 # ============================================================
 # DOWNLOAD WAIT
@@ -1382,18 +1359,6 @@ def process_one_kode(driver, kode, fr, seq, total):
     t0 = time.time()
     say(f"\n[{seq}/{total}] Kode: {kode}")
     try:
-        # 0. v8.7: Recover to list view — clear state pollution dari kode sebelumnya.
-        #    Cegah E_SEARCH bug (20447 gagal 'search box tidak ditemukan' karena detail
-        #    tab 20451 nggak ke-close → list view nggak accessible → input[name=keyword]
-        #    hidden). Tutup overlay + tutup SEMUA detail tab + klik btnToggleList (proven
-        #    trigger search-item-transfer.do = list refresh).
-        say(f"  [0/8] Recover to list view (clear state pollution dari kode sebelumnya)...")
-        recover_to_list_view(driver, timeout=5)
-        # re-find frame list (mungkin berubah setelah btnToggleList click — list frame ke-refresh)
-        fr_now = find_list_frame(driver, timeout=8)
-        if fr_now:
-            fr = fr_now
-            say(f"  [OK] Frame list di-refresh: {fr}")
         # 1. Search
         say(f"  [1/8] Search kode...")
         if not search_kode(driver, kode, fr):
@@ -1503,8 +1468,29 @@ def process_one_kode(driver, kode, fr, seq, total):
 
         # 8. Tutup tab detail
         say(f"  [8/8] Tutup tab detail...")
-        close_detail_tab(driver, kode, timeout=5)
-        time.sleep(1)
+        close_detail_tab(driver, kode, timeout=10)
+        # v8.8: user confirm ada loading setelah close tab detail -> tunggu search box
+        # (input[name=keyword]) visible lagi = list view udah ready buat kode berikutnya.
+        say(f"  [8.5] Tunggu list view ready (search box visible)...")
+        end = time.time() + 10
+        list_ready = False
+        while time.time() < end:
+            try:
+                switch_top(driver)
+                inps = driver.find_elements(By.CSS_SELECTOR, "input[name='keyword']")
+                for inp in inps:
+                    try:
+                        if inp.is_displayed():
+                            list_ready = True
+                            break
+                    except: continue
+                if list_ready: break
+            except: pass
+            time.sleep(0.5)
+        if list_ready:
+            say(f"  [OK] List view ready (search box visible).")
+        else:
+            say(f"  [WARNING] Search box belum visible setelah 10s. Kode berikutnya mungkin gagal search.")
 
         dt = time.time() - t0
         say(f"  [DONE] {kode} -> {fname} ({dt:.1f}s)")
@@ -1518,7 +1504,7 @@ def process_one_kode(driver, kode, fr, seq, total):
 
 def main():
     say("=" * 60)
-    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.7)")
+    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.8)")
     say("=" * 60)
     say(f"Folder download: {DOWNLOAD_DIR}")
     if not os.path.isdir(DOWNLOAD_DIR):
@@ -1554,8 +1540,8 @@ def main():
         ok, result = process_one_kode(driver, kode, fr, i, len(kodes))
         results.append((kode, ok, result))
         if i < len(kodes):
-            say(f"\n  Jeda 2 detik sebelum kode berikutnya...")
-            time.sleep(2)
+            say(f"\n  Jeda 1 detik sebelum kode berikutnya...")
+            time.sleep(1)
             # re-find frame (mungkin berubah)
             fr2 = find_list_frame(driver, timeout=8)
             if fr2: fr = fr2
