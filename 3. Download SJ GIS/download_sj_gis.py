@@ -1,7 +1,29 @@
 """
-download_sj_gis.py  (v8.4 - FINAL)
+download_sj_gis.py  (v8.5 - DIAGNOSTIC)
 =================================
 Download Surat Jalan (SJ) dari modul PEMINDAHAN BARANG Accurate Online (database GiS).
+
+PERBAIKAN v8.5 DIAGNOSTIC (dari v8.4):
+  - TUJUAN: versi DIAGNOSTIC buat lihat REAL DOM state. v8.4 'graceful skip'
+    di step 4 MASKS bug sebenarnya — tool SKIP kode yg PUNYA dokumen karena
+    dropdown detection unreliable. v8.5 hapus skip, tambah dump di 2 titik
+    kritikal (step 3.5 + 4.5) supaya kelihatan state ul.drop-left + attachment
+    panel yg sebenarnya. Dari dump, fix v8.6 ditulis berdasar data nyata.
+  - ADD: dump_dropdown_state(driver, label) — dump ALL ul.drop-left + items
+    (opacity, display, size, parent) + attachment panel existence.
+    Dipanggil di:
+      * step 3.5 (after click_comment_attachment OK, before step 4) — nunjukin
+        apakah btnCommentAttachment click benar2 buka dropdown.
+      * step 4.5 (after click_first_dropdown_item OK, before step 5) — nunjukin
+        apakah dropdown <a> click benar2 buka attachment panel.
+  - REMOVE: 'graceful skip' di step 4. v8.4 return SKIP_NO_DOCUMENT kalau
+    dropdown nggak ketemu — itu MASKS bug. v8.5: return False, "E_DROPDOWN"
+    (real error) + dump udah di step 3.5 nunjukin state sebenarnya. Tool STOP
+    utk kode ini (recover_to_list), nggak dibilang "no document" (kita nggak
+    tahu itu sampe bisa detect dropdown dgn reliable).
+  - SUMMARY: cuma [OK] / [FAIL] (nggak ada [SKIP]). Counter: "Berhasil: X/total".
+  - Download flow steps 1, 2, 3, 5, 6, 7, 7.5, 7.6, 7.7, 8 TIDAK diubah
+    (step 4 hanya logic skip yg diganti jadi error + dump dipanggil di sekitar).
 
 PERBAIKAN v8.4 (dari v8.3):
   - FIX ISSUE 1: STEP 3 (klik i#btnCommentAttachment) kini pakai JS clickSeq (native
@@ -612,6 +634,97 @@ def click_first_dropdown_item(driver, timeout=8):
     return None
 
 # ============================================================
+# DIAGNOSTIC DUMP (v8.5) — dump ALL ul.drop-left + items + attachment panels
+# ============================================================
+# Purpose: lihat REAL DOM state di 2 titik kritikal:
+#   - step 3.5 (after click_comment_attachment) — apakah btnCommentAttachment
+#     click benar2 buka dropdown? Berapa ul.drop-left visible? Itemnya apa?
+#   - step 4.5 (after click_first_dropdown_item) — apakah dropdown <a> click
+#     benar2 buka attachment panel? Panel ada + visible?
+# Dari dump ini, fix selector v8.6 ditulis berdasar data nyata (bukan tebakan).
+JS_DUMP_DROPDOWN_STATE = JS_VIS + """
+return (function(){
+  var out = {label: arguments[0] || '', url: location.href.slice(0,100), dropLefts: []};
+  var uls = document.querySelectorAll('ul.drop-left, ul[class*="drop-left"]');
+  for (var i=0;i<uls.length && out.dropLefts.length<10;i++){
+    var ul = uls[i];
+    var st = window.getComputedStyle(ul);
+    var vis = !(st.display==='none'||st.visibility==='hidden'||parseFloat(st.opacity)===0);
+    var r = ul.getBoundingClientRect();
+    var sizeOk = r.width>0 && r.height>0;
+    var parent = ul.parentElement;
+    var items = [];
+    var links = ul.querySelectorAll('a, li > a, li');
+    for (var j=0;j<links.length && items.length<8;j++){
+      var a = links[j];
+      var ast = window.getComputedStyle(a);
+      var avis = !(ast.display==='none'||ast.visibility==='hidden'||parseFloat(ast.opacity)===0);
+      var ar = a.getBoundingClientRect();
+      var asizeOk = ar.width>0 && ar.height>0;
+      items.push({
+        tag: a.tagName,
+        text: (a.innerText||a.textContent||'').trim().slice(0,40),
+        href: (a.getAttribute&&a.getAttribute('href')||'').slice(0,60),
+        onclick: (a.getAttribute&&a.getAttribute('onclick')||'').slice(0,60),
+        visible: avis && asizeOk,
+        opacity: parseFloat(ast.opacity)
+      });
+    }
+    out.dropLefts.push({
+      idx: i,
+      visible: vis && sizeOk,
+      opacity: parseFloat(st.opacity),
+      display: st.display,
+      parentTag: parent?parent.tagName:'',
+      parentClass: parent?(parent.className||'').toString().slice(0,60):'',
+      parentId: parent?(parent.id||''):'',
+      itemCount: items.length,
+      items: items
+    });
+  }
+  // also check attachment panel existence
+  out.attachmentPanels = [];
+  var aps = document.querySelectorAll("div[id^='accurate__company__attachment']");
+  for (var k=0;k<aps.length && out.attachmentPanels.length<5;k++){
+    var p = aps[k];
+    var pst = window.getComputedStyle(p);
+    out.attachmentPanels.push({
+      id: p.id,
+      visible: !(pst.display==='none'||pst.visibility==='hidden'||parseFloat(pst.opacity)===0),
+      hasDownloadIcon: !!p.querySelector('i.icon-download-2, i[class*="icon-download"]')
+    });
+  }
+  return out;
+})(arguments[0]);
+"""
+
+def dump_dropdown_state(driver, label):
+    """Diagnostic dump: ALL ul.drop-left + items + attachment panels. For v8.5 diagnosis."""
+    switch_top(driver)
+    try:
+        st = driver.execute_script(JS_DUMP_DROPDOWN_STATE, label)
+    except Exception as e:
+        say(f"  [DUMP ERR] {e}"); return
+    say(f"\n  ===== DUMP: {label} =====")
+    say(f"  URL: {st.get('url','?')[:80]}")
+    dls = st.get('dropLefts', [])
+    say(f"  ul.drop-left total: {len(dls)}")
+    for dl in dls:
+        say(f"    [{dl['idx']}] visible={dl['visible']} opacity={dl.get('opacity','?')} display={dl.get('display','?')[:15]}")
+        say(f"        parent: <{dl['parentTag']}> id='{dl['parentId']}' class='{dl['parentClass']}'")
+        say(f"        items ({dl['itemCount']}):")
+        for it in dl.get('items', []):
+            say(f"          [{it['tag']}] text='{it['text']}' href='{it['href'][:30]}' visible={it['visible']} opacity={it.get('opacity','?')}")
+    aps = st.get('attachmentPanels', [])
+    if aps:
+        say(f"  Attachment panels: {len(aps)}")
+        for ap in aps:
+            say(f"    id='{ap['id']}' visible={ap['visible']} hasDownloadIcon={ap['hasDownloadIcon']}")
+    else:
+        say(f"  Attachment panels: 0 (none)")
+    say(f"  ===== END DUMP =====\n")
+
+# ============================================================
 # STEP 5: WAIT ATTACHMENT PANEL + CLICK icon-download-2
 # ============================================================
 def wait_attachment_panel(driver, timeout=15):
@@ -1040,21 +1153,31 @@ def process_one_kode(driver, kode, fr, seq, total):
             return False, "E_BTN_COMMENT"
         say(f"  [OK] btnCommentAttachment diklik via {how}. Tunggu dropdown...")
 
+        # 3.5 DIAGNOSTIC DUMP (v8.5) — lihat state ul.drop-left SETELAH klik btnCommentAttachment.
+        #     Ini nunjukin apakah btnCommentAttachment click benar2 buka dropdown (berapa ul.drop-left
+        #     visible, itemnya apa). Kunci buat diagnose "dropdown nggak muncul" bug.
+        dump_dropdown_state(driver, "AFTER click btnCommentAttachment (step 3.5)")
+
         # 4. Click first <a> di dropdown
         say(f"  [4/8] Klik <a> pertama di dropdown (buka attachment panel)...")
         how = click_first_dropdown_item(driver, timeout=8)
         if not how:
-            # v8.4: GRACEFUL SKIP — kalau dropdown nggak muncul setelah btnCommentAttachment,
-            # kemungkinan transaksi ini BELUM ada dokumen upload (bukan error fatal). SKIP ke kode berikutnya.
-            say(f"  [SKIP] Tidak ada dokumen untuk {kode} (dropdown tidak muncul setelah btnCommentAttachment).")
-            say(f"  Kemungkinan transaksi ini belum ada dokumen upload. Lanjut ke kode berikutnya.")
-            # cleanup: tutup overlay (just in case) + tutup detail tab biar balik ke list
-            close_attachment_overlay(driver, timeout=3)
-            close_detail_tab(driver, kode, timeout=5)
-            return False, "SKIP_NO_DOCUMENT"
+            # v8.5 DIAGNOSTIC: jangan SKIP dibilang "no document" — itu MASKS bug.
+            # Kita nggak tahu apakah dokumen ada sampe bisa detect dropdown dgn reliable.
+            # Dump di step 3.5 udah nunjukin state sebenarnya. Fail dgn E_DROPDOWN.
+            say(f"  [ERROR] Dropdown tidak ditemukan setelah btnCommentAttachment (8s wait).")
+            say(f"  LIHAT DUMP step 3.5 di atas — itu nunjukin state sebenarnya.")
+            say(f"  Kalau di dump ada ul.drop-left visible dgn <a> items = dropdown kebuka tapi tool nggak nemu (visibility bug).")
+            say(f"  Kalau di dump 0 ul.drop-left = klik btnCommentAttachment nggak trigger dropdown.")
+            recover_to_list(driver, kode)
+            return False, "E_DROPDOWN"
         say(f"  [OK] Dropdown item diklik via {how}. Tunggu attachment panel...")
 
-        # 4.5 SAFETY CHECK: pastikan nggak ke-navigation ke Dashboard
+        # 4.5 DIAGNOSTIC DUMP (v8.5) — lihat state attachment panel SETELAH klik dropdown <a>.
+        #     Ini nunjukin apakah dropdown <a> click benar2 buka attachment panel (panel ada + visible?).
+        dump_dropdown_state(driver, "AFTER click dropdown <a> (step 4.5)")
+
+        # 4.6 SAFETY CHECK: pastikan nggak ke-navigation ke Dashboard
         time.sleep(1)
         if not verify_still_on_detail(driver, kode):
             say(f"  [ERROR] Halaman berubah (ke Dashboard?) setelah klik dropdown.")
@@ -1131,7 +1254,7 @@ def process_one_kode(driver, kode, fr, seq, total):
 
 def main():
     say("=" * 60)
-    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.4 FINAL)")
+    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.5 DIAGNOSTIC)")
     say("=" * 60)
     say(f"Folder download: {DOWNLOAD_DIR}")
     if not os.path.isdir(DOWNLOAD_DIR):
@@ -1178,20 +1301,12 @@ def main():
     say("  RINGKASAN HASIL")
     say("=" * 60)
     success = 0
-    skipped = 0
     for kode, ok, result in results:
-        if ok:
-            status = "OK"
-        elif result == "SKIP_NO_DOCUMENT":
-            status = "SKIP"
-        else:
-            status = "FAIL"
+        status = "OK" if ok else "FAIL"
         say(f"  [{status}] {kode} -> {result}")
         if ok:
             success += 1
-        elif result == "SKIP_NO_DOCUMENT":
-            skipped += 1
-    say(f"\n  Berhasil: {success}/{len(kodes)}, Skip: {skipped}/{len(kodes)}")
+    say(f"\n  Berhasil: {success}/{len(kodes)}")
     say(f"  Folder   : {DOWNLOAD_DIR}")
     say("=" * 60)
 
