@@ -1,7 +1,22 @@
 """
-download_sj_gis.py  (v8.3 - FINAL)
+download_sj_gis.py  (v8.4 - FINAL)
 =================================
 Download Surat Jalan (SJ) dari modul PEMINDAHAN BARANG Accurate Online (database GiS).
+
+PERBAIKAN v8.4 (dari v8.3):
+  - FIX ISSUE 1: STEP 3 (klik i#btnCommentAttachment) kini pakai JS clickSeq (native
+    MouseEvent dispatch: pointerdown+mousedown+pointerup+mouseup+click) sebagai PRIMARY,
+    ActionChains sebagai fallback. v8.3 pakai ActionChains yg TIDAK reliably trigger
+    jQuery dropdown handler Accurate (sama kayak cell click issue v8.1): utk kode
+    IT.2026.09.20451 (PUNYA dokumen), dropdown nggak muncul -> "Dropdown item tidak
+    ditemukan" -> abort. JS clickSeq (native event) trigger jQuery handler dgn benar.
+    Pakai SINGLE click (TANPA dblclick) — dblclick bisa toggle/close dropdown.
+    Konstanta baru: JS_CLICK_SEQ_SINGLE.
+  - FIX ISSUE 2: kode TANPA dokumen (e.g. IT.2026.09.20447) -> dropdown emang nggak
+    muncul. v8.3 abort dgn E_DROPDOWN (treated as FAIL). v8.4: treat as SKIP gracefully
+    (log [SKIP], tutup detail tab, return SKIP_NO_DOCUMENT, lanjut kode berikutnya).
+    Summary kini tampilkan [SKIP] terpisah dari [FAIL]: Berhasil: X/total, Skip: Y/total.
+  - Download flow utama (steps 1, 2, 5, 6, 7, 7.5, 7.6, 7.7, 8) TIDAK diubah.
 
 PERBAIKAN v8.3 (dari v8.2):
   - FEATURE: setelah download selesai, file di-rename jadi
@@ -324,6 +339,18 @@ try { el.dispatchEvent(new MouseEvent('dblclick', init)); } catch(e){}
 return 'OK';
 """
 
+# v8.4 — JS clickSeq SINGLE-click only (NO dblclick). Dipakai buat i#btnCommentAttachment:
+# single click trigger Accurate's jQuery dropdown.open(). dblclick bisa toggle/close dropdown
+# jadi nggak muncul. (Sama kayak JS_CLICK_SEQ buat cell, tapi tanpa dblclick backup.)
+JS_CLICK_SEQ_SINGLE = """
+var el = arguments[0];
+var init = {bubbles:true, cancelable:true, view:window, button:0, buttons:1};
+['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(t){
+  try { el.dispatchEvent(new MouseEvent(t, init)); } catch(e){}
+});
+return 'OK';
+"""
+
 # ============================================================
 # STEP 1: SEARCH (proven)
 # ============================================================
@@ -480,21 +507,36 @@ def wait_detail_open(driver, kode, timeout=15):
 # STEP 3: CLICK i#btnCommentAttachment (tombol Komentar/Dokumen)
 # ============================================================
 def click_comment_attachment(driver):
-    """Klik i#btnCommentAttachment (id unik dari recording)."""
+    """Klik i#btnCommentAttachment via JS clickSeq (native MouseEvent) — ActionChains nggak reliable
+    buat trigger jQuery dropdown handler Accurate (sama kayak cell click issue v8.1).
+    v8.4: PRIMARY = JS clickSeq SINGLE (no dblclick — dblclick bisa toggle/close dropdown)."""
     switch_top(driver)
-    # Priority 1: by id (paling reliable)
+    # Priority 1: by id, click via JS clickSeq (native events) — paling reliable buat jQuery handler
+    try:
+        btn = driver.find_element(By.ID, "btnCommentAttachment")
+        if btn:
+            # scroll into view dulu biar event dispatch kena target
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+            # dispatch native single-click sequence (pointerdown+mousedown+pointerup+mouseup+click)
+            driver.execute_script(JS_CLICK_SEQ_SINGLE, btn)
+            return "JS_CLICKSEQ"
+    except Exception as e:
+        say(f"  [WARNING] JS clickSeq on btnCommentAttachment failed: {e}")
+    # Fallback 1: ActionChains (lama) — kalau JS clickSeq somehow gagal
     try:
         btn = driver.find_element(By.ID, "btnCommentAttachment")
         if btn:
             return smart_click(driver, btn)
     except: pass
-    # Priority 2: by exact class (lebih ketat dari contains)
+    # Fallback 2: by class i.icn-navigation-attachment, click via JS clickSeq
     try:
         btns = driver.find_elements(By.CSS_SELECTOR, "i.icn-navigation-attachment")
         for btn in btns:
             try:
                 if btn.is_displayed():
-                    return smart_click(driver, btn)
+                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+                    driver.execute_script(JS_CLICK_SEQ_SINGLE, btn)
+                    return "JS_CLICKSEQ_CLASS"
             except: continue
     except: pass
     return None
@@ -1002,9 +1044,14 @@ def process_one_kode(driver, kode, fr, seq, total):
         say(f"  [4/8] Klik <a> pertama di dropdown (buka attachment panel)...")
         how = click_first_dropdown_item(driver, timeout=8)
         if not how:
-            say(f"  [ERROR] Dropdown item tidak ditemukan.")
-            recover_to_list(driver, kode)
-            return False, "E_DROPDOWN"
+            # v8.4: GRACEFUL SKIP — kalau dropdown nggak muncul setelah btnCommentAttachment,
+            # kemungkinan transaksi ini BELUM ada dokumen upload (bukan error fatal). SKIP ke kode berikutnya.
+            say(f"  [SKIP] Tidak ada dokumen untuk {kode} (dropdown tidak muncul setelah btnCommentAttachment).")
+            say(f"  Kemungkinan transaksi ini belum ada dokumen upload. Lanjut ke kode berikutnya.")
+            # cleanup: tutup overlay (just in case) + tutup detail tab biar balik ke list
+            close_attachment_overlay(driver, timeout=3)
+            close_detail_tab(driver, kode, timeout=5)
+            return False, "SKIP_NO_DOCUMENT"
         say(f"  [OK] Dropdown item diklik via {how}. Tunggu attachment panel...")
 
         # 4.5 SAFETY CHECK: pastikan nggak ke-navigation ke Dashboard
@@ -1084,7 +1131,7 @@ def process_one_kode(driver, kode, fr, seq, total):
 
 def main():
     say("=" * 60)
-    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.3 FINAL)")
+    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.4 FINAL)")
     say("=" * 60)
     say(f"Folder download: {DOWNLOAD_DIR}")
     if not os.path.isdir(DOWNLOAD_DIR):
@@ -1131,11 +1178,20 @@ def main():
     say("  RINGKASAN HASIL")
     say("=" * 60)
     success = 0
+    skipped = 0
     for kode, ok, result in results:
-        status = "OK" if ok else "FAIL"
+        if ok:
+            status = "OK"
+        elif result == "SKIP_NO_DOCUMENT":
+            status = "SKIP"
+        else:
+            status = "FAIL"
         say(f"  [{status}] {kode} -> {result}")
-        if ok: success += 1
-    say(f"\n  Berhasil: {success}/{len(kodes)}")
+        if ok:
+            success += 1
+        elif result == "SKIP_NO_DOCUMENT":
+            skipped += 1
+    say(f"\n  Berhasil: {success}/{len(kodes)}, Skip: {skipped}/{len(kodes)}")
     say(f"  Folder   : {DOWNLOAD_DIR}")
     say("=" * 60)
 
