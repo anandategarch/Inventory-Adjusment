@@ -1,7 +1,21 @@
 """
-download_sj_gis.py  (v8.11)
+download_sj_gis.py  (v8.12)
 =========================
 Download Surat Jalan (SJ) dari modul PEMINDAHAN BARANG Accurate Online (database GiS).
+
+PERBAIKAN v8.12 (dari v8.11):
+  - TUJUAN: dukung pemanggilan via subprocess dari tab "Download SJ GIS"
+    di ui_app.py (folder 2. Import IA). UI kirim kodes via env var
+    SJ_GIS_KODES (string, dipisah koma). main() baca env var dulu,
+    kalau kosong -> fallback input() manual (utk standalone .bat usage).
+  - FIX: blok input("Tekan Enter untuk keluar...") di akhir dilewati kalau
+    dijalankan via UI (deteksi: SJ_GIS_KODES set ATAU IA_UI_MODE=1).
+    Tanpa check ini, subprocess akan hang menunggu stdin (UI nggak ngirim
+    newline di akhir -> deadlock). Pattern sama kayak tab Import IA
+    (IA_UI_MODE env var).
+  - Download flow steps 1-7, JS clickSeq, timing 1.5s, JS_FIND_NEW_DROPDOWN_A
+    filter asterisk — SEMUA TIDAK diubah. Hanya main() wrapper + final
+    input() guard.
 
 PERBAIKAN v8.11 (dari v8.10):
   - TUJUAN: fix intermittent E_DOWNLOAD_ICON utk kode 19805 (v8.9 OK, v8.10 FAIL,
@@ -1627,17 +1641,22 @@ def process_one_kode(driver, kode, fr, seq, total):
 
 def main():
     say("=" * 60)
-    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.11)")
+    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.12)")
     say("=" * 60)
     say(f"Folder download: {DOWNLOAD_DIR}")
     if not os.path.isdir(DOWNLOAD_DIR):
         say(f"[ERROR] Folder Downloads tidak ditemukan: {DOWNLOAD_DIR}")
         sys.exit(1)
 
-    raw = input("\nMasukkan kode SJ (1 kode, atau multi dipisah koma):\n  misal: IT.2026.09.19805\n  atau : IT.2026.09.19805, IT.2026.09.20451, IT.2026.09.20447\n\nKode: ").strip()
-    if not raw:
-        raw = "IT.2026.09.19805"
-        say(f"  [INFO] Kosong -> pakai default: {raw}")
+    # v8.12: baca dari env var SJ_GIS_KODES (dari UI subprocess). Kalau kosong, input() manual.
+    raw = os.environ.get("SJ_GIS_KODES", "").strip()
+    if raw:
+        say(f"  [INFO] Kode dari UI (env var): {raw[:80]}")
+    else:
+        raw = input("\nMasukkan kode SJ (1 kode, atau multi dipisah koma):\n  misal: IT.2026.09.19805\n  atau : IT.2026.09.19805, IT.2026.09.20451, IT.2026.09.20447\n\nKode: ").strip()
+        if not raw:
+            raw = "IT.2026.09.19805"
+            say(f"  [INFO] Kosong -> pakai default: {raw}")
     # Parse multi-kode
     kodes = [k.strip() for k in raw.split(",") if k.strip()]
     kodes = [k for k in kodes if KODE_RE.match(k) or True]  # accept all non-empty
@@ -1690,4 +1709,7 @@ if __name__ == "__main__":
         say(f"\n[FATAL] {type(e).__name__}: {e}")
         traceback.print_exc()
         say("\nKirim error ini ke saya, jangan tutup dulu.")
-    input("\nTekan Enter untuk keluar...")
+    # v8.12: kalau dipanggil via UI (SJ_GIS_KODES set / IA_UI_MODE=1),
+    # skip prompt akhir (subprocess tidak punya TTY -> input() akan hang / EOF).
+    if not os.environ.get("SJ_GIS_KODES") and not os.environ.get("IA_UI_MODE"):
+        input("\nTekan Enter untuk keluar...")

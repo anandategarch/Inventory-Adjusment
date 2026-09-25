@@ -1,6 +1,10 @@
 """
-ui_app.py — tampilan aplikasi Import IA (v4.10, pasangan accurate_bot.py v4.7).
-Tab: Otomasi | Database COA & Keterangan | Download Draft IA.
+ui_app.py — tampilan aplikasi Import IA (v4.11, pasangan accurate_bot.py v4.7).
+Tab: Otomasi | Database COA & Keterangan | Download Draft IA | Download SJ GIS.
+v4.11: tab keempat "Download SJ GIS" — menjalankan download_sj_gis.py (v8.12,
+folder 3. Download SJ GIS) sebagai subprocess. Kode SJ dikirim via env var
+SJ_GIS_KODES (string dipisah koma). Stdout direplay ke widget log terminal
+style + progress bar (parse [X/Y] pattern dari output say()).
 v4.10: pipeline Download = [FILTER] lalu [UNDUH]; nama cabang tersimpan di ui_settings.json.
 """
 import os
@@ -273,6 +277,13 @@ class AutoImportApp(tk.Tk):
         self.dl_proc = None
         self.dl_branches = ""
 
+        # ---- Download SJ GIS (tab keempat, v4.11) ----
+        self.sj_running = False
+        self.sj_stop = threading.Event()
+        self.sj_proc = None
+        self.sj_kodes = []
+        self.sj_script_path = None
+
         self._setup_style()
         self._build_ui()
         self._apply_settings()
@@ -327,9 +338,11 @@ class AutoImportApp(tk.Tk):
         tab_auto = ttk.Frame(self.notebook)
         tab_db = ttk.Frame(self.notebook)
         tab_dl = ttk.Frame(self.notebook)
+        tab_sj = ttk.Frame(self.notebook)
         self.notebook.add(tab_auto, text="  Otomasi  ")
         self.notebook.add(tab_db, text="  Database COA & Keterangan  ")
         self.notebook.add(tab_dl, text="  Download Draft IA  ")
+        self.notebook.add(tab_sj, text="  Download SJ GIS  ")
 
         # ================= TAB OTOMASI =================
         self.scroller = ScrollableBody(tab_auto)
@@ -553,6 +566,114 @@ class AutoImportApp(tk.Tk):
         self.dl_text.bind("<Button-5>", self._dl_text_wheel)
         ttk.Button(log_card, text="Bersihkan", command=self._dl_clear).grid(row=2, column=0, sticky="e", padx=14, pady=(0, 10))
 
+        # ================= TAB DOWNLOAD SJ GIS (v4.11) =================
+        sjview = ttk.Frame(tab_sj, style="TFrame")
+        sjview.pack(fill="both", expand=True, padx=18, pady=16)
+        sjview.columnconfigure(0, weight=1)
+        sjview.columnconfigure(1, weight=1)
+        sjview.rowconfigure(1, weight=1)
+
+        # ---- Card 1: Input Kode SJ ----
+        sj_in_card = self._card(sjview, "1. Input Kode SJ")
+        sj_in_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 8))
+        sj_in_card.columnconfigure(0, weight=1)
+        tk.Label(sj_in_card, text="Masukkan kode SJ (pisahkan dgn koma atau baris baru):",
+                 bg=C_CARD, fg="#475569", font=F_BODY, anchor="w"
+                 ).grid(row=1, column=0, sticky="ew", padx=14, pady=(6, 2))
+        sj_txt_wrap = tk.Frame(sj_in_card, bg=C_TERM_BG)
+        sj_txt_wrap.grid(row=2, column=0, sticky="nsew", padx=14, pady=(0, 6))
+        sj_txt_wrap.columnconfigure(0, weight=1)
+        sj_txt_wrap.rowconfigure(0, weight=1)
+        self.sj_kodes_text = tk.Text(sj_txt_wrap, bg=C_TERM_BG, fg="#dbeafe", insertbackground="white",
+                                     relief="flat", font=F_LOG, wrap="word", height=6,
+                                     undo=True)
+        self.sj_kodes_text.grid(row=0, column=0, sticky="nsew")
+        sj_txt_sb = ttk.Scrollbar(sj_txt_wrap, orient="vertical", command=self.sj_kodes_text.yview)
+        sj_txt_sb.grid(row=0, column=1, sticky="ns")
+        self.sj_kodes_text.configure(yscrollcommand=sj_txt_sb.set)
+        self.sj_kodes_text.bind("<KeyRelease>", self._sj_count_kodes)
+        self.sj_kodes_text.bind("<MouseWheel>", self._sj_text_wheel)
+        self.sj_kodes_text.bind("<Button-4>", self._sj_text_wheel)
+        self.sj_kodes_text.bind("<Button-5>", self._sj_text_wheel)
+        self.sj_count_lbl = tk.Label(sj_in_card, text="0 kode terdeteksi",
+                                     bg=C_INFO_BG, fg="#475569", padx=12, pady=6,
+                                     font=(_FONT, 10, "bold"), anchor="w")
+        self.sj_count_lbl.grid(row=3, column=0, sticky="ew", padx=14, pady=(0, 10))
+
+        # ---- Card 2: Kontrol ----
+        sj_ctl_card = self._card(sjview, "2. Kontrol")
+        sj_ctl_card.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=(0, 8))
+        sj_ctl_card.columnconfigure(0, weight=1)
+
+        self.sj_script_lbl = tk.Label(sj_ctl_card, text="Script: download_sj_gis.py — memeriksa...",
+                                      justify="left", anchor="w", bg=C_INFO_BG, fg="#475569",
+                                      padx=12, pady=8, font=F_BODY)
+        self.sj_script_lbl.grid(row=1, column=0, sticky="ew", padx=14, pady=(6, 4))
+        self.sj_chrome_lbl = tk.Label(sj_ctl_card, text="Chrome 9222: memeriksa...",
+                                     justify="left", anchor="w", bg=C_INFO_BG, fg="#475569",
+                                     padx=12, pady=8, font=F_BODY)
+        self.sj_chrome_lbl.grid(row=2, column=0, sticky="ew", padx=14, pady=(0, 6))
+
+        sj_ctl_btns = tk.Frame(sj_ctl_card, bg=C_CARD)
+        sj_ctl_btns.grid(row=3, column=0, sticky="ew", padx=14, pady=(0, 6))
+        ttk.Button(sj_ctl_btns, text="Deteksi Ulang",
+                   command=self._sj_detect_script).pack(side="left", padx=(0, 8))
+        ttk.Button(sj_ctl_btns, text="Cek Chrome",
+                   command=self._sj_check_chrome).pack(side="left")
+
+        sj_run_btns = tk.Frame(sj_ctl_card, bg=C_CARD)
+        sj_run_btns.grid(row=4, column=0, sticky="ew", padx=14, pady=(0, 6))
+        self.sj_start_btn = ttk.Button(sj_run_btns, text="▶  Mulai Download",
+                                       style="Success.TButton",
+                                       command=self._start_sj_download)
+        self.sj_start_btn.pack(side="left", padx=(0, 8))
+        self.sj_stop_btn = ttk.Button(sj_run_btns, text="■  Hentikan",
+                                      style="Danger.TButton", state="disabled",
+                                      command=self._stop_sj_download)
+        self.sj_stop_btn.pack(side="left")
+
+        sj_prog = tk.Frame(sj_ctl_card, bg=C_CARD)
+        sj_prog.grid(row=5, column=0, sticky="ew", padx=14, pady=(0, 4))
+        sj_prog.columnconfigure(0, weight=1)
+        self.sj_progress = ttk.Progressbar(sj_prog, mode="determinate")
+        self.sj_progress.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        self.sj_counter_lbl = tk.Label(sj_prog, text="0 / 0", bg=C_CARD, fg="#475569", font=F_BODY)
+        self.sj_counter_lbl.grid(row=0, column=1)
+
+        self.sj_status_lbl = tk.Label(sj_ctl_card, text="Siap.", justify="left", anchor="w",
+                                      bg=C_INFO_BG, fg="#334155", padx=12, pady=8, font=F_BODY)
+        self.sj_status_lbl.grid(row=6, column=0, sticky="ew", padx=14, pady=(0, 10))
+
+        # ---- Card 3: Log Download SJ ----
+        sj_log_card = self._card(sjview, "3. Log Download SJ")
+        sj_log_card.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        sj_log_card.columnconfigure(0, weight=1)
+        sj_log_card.rowconfigure(1, weight=1)
+        sj_log_wrap = tk.Frame(sj_log_card, bg=C_TERM_BG)
+        sj_log_wrap.grid(row=1, column=0, sticky="nsew", padx=14, pady=(4, 8))
+        sj_log_wrap.columnconfigure(0, weight=1)
+        sj_log_wrap.rowconfigure(0, weight=1)
+        self.sj_text = tk.Text(sj_log_wrap, bg=C_TERM_BG, fg="#dbeafe", insertbackground="white",
+                               relief="flat", font=F_LOG, wrap="word", state="disabled")
+        self.sj_text.grid(row=0, column=0, sticky="nsew")
+        sj_log_sb = ttk.Scrollbar(sj_log_wrap, orient="vertical", command=self.sj_text.yview)
+        sj_log_sb.grid(row=0, column=1, sticky="ns")
+        self.sj_text.configure(yscrollcommand=sj_log_sb.set)
+        self.sj_text.bind("<MouseWheel>", self._sj_log_wheel)
+        self.sj_text.bind("<Button-4>", self._sj_log_wheel)
+        self.sj_text.bind("<Button-5>", self._sj_log_wheel)
+        sj_log_btns = tk.Frame(sj_log_card, bg=C_CARD)
+        sj_log_btns.grid(row=2, column=0, sticky="e", padx=14, pady=(0, 10))
+        ttk.Button(sj_log_btns, text="Buka Folder Unduhan",
+                   command=self._sj_open_folder).pack(side="right", padx=(8, 0))
+        ttk.Button(sj_log_btns, text="Bersihkan",
+                   command=self._sj_clear).pack(side="right")
+
+        # ---- Inisialisasi indikator SJ (auto-detect script + cek chrome + load kodes) ----
+        self._sj_detect_script()
+        self._sj_check_chrome()
+        self._load_sj_settings()
+
     # ================= HELPERS =================
     def _db_tree_wheel(self, e):
         steps = _wheel_steps(e)
@@ -568,6 +689,22 @@ class AutoImportApp(tk.Tk):
         steps = _wheel_steps(e)
         if steps:
             self.dl_text.yview_scroll(steps, "units")
+
+    def _sj_text_wheel(self, e):
+        steps = _wheel_steps(e)
+        if steps:
+            try:
+                self.sj_kodes_text.yview_scroll(steps, "units")
+            except Exception:
+                pass
+
+    def _sj_log_wheel(self, e):
+        steps = _wheel_steps(e)
+        if steps:
+            try:
+                self.sj_text.yview_scroll(steps, "units")
+            except Exception:
+                pass
 
     def _card(self, parent, title):
         outer = ttk.Frame(parent, style="Card.TFrame", padding=0)
@@ -668,6 +805,189 @@ class AutoImportApp(tk.Tk):
         self.dl_text.configure(state="normal")
         self.dl_text.delete("1.0", "end")
         self.dl_text.configure(state="disabled")
+
+    # ================= DOWNLOAD SJ GIS (v4.11) =================
+    def _sj_detect_script(self):
+        """Auto-detect download_sj_gis.py path: ../3. Download SJ GIS/ relative to this file."""
+        base = os.path.dirname(os.path.abspath(__file__))
+        candidates = [
+            os.path.join(base, "..", "3. Download SJ GIS", "download_sj_gis.py"),
+            os.path.join(base, "3. Download SJ GIS", "download_sj_gis.py"),
+            os.path.join(base, "download_sj_gis.py"),
+        ]
+        for c in candidates:
+            c = os.path.normpath(c)
+            if os.path.isfile(c):
+                self.sj_script_path = c
+                self.sj_script_lbl.configure(
+                    text=f"Script: {os.path.basename(c)} — ✓ terdeteksi", fg="#16a34a")
+                return True
+        self.sj_script_path = None
+        self.sj_script_lbl.configure(
+            text="Script: download_sj_gis.py — ✗ tidak ditemukan", fg="#dc2626")
+        return False
+
+    def _sj_check_chrome(self):
+        """Check if Chrome debugging port 9222 is active."""
+        import socket
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.5)
+                if s.connect_ex(("127.0.0.1", 9222)) == 0:
+                    self.sj_chrome_lbl.configure(text="Chrome 9222: ✓ terhubung", fg="#16a34a")
+                    return True
+        except Exception:
+            pass
+        self.sj_chrome_lbl.configure(text="Chrome 9222: ✗ belum aktif", fg="#dc2626")
+        return False
+
+    def _sj_open_folder(self):
+        """Open ~/Downloads folder."""
+        try:
+            if sys.platform == "win32":
+                try:
+                    os.startfile(DOWNLOAD_DIR)
+                except Exception:
+                    subprocess.Popen(["explorer", DOWNLOAD_DIR])
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", DOWNLOAD_DIR])
+            else:
+                subprocess.Popen(["xdg-open", DOWNLOAD_DIR])
+        except Exception as e:
+            messagebox.showwarning(APP_TITLE, f"Tidak bisa membuka folder unduhan:\n{e}", parent=self)
+
+    def _sj_clear(self):
+        self.sj_text.configure(state="normal")
+        self.sj_text.delete("1.0", "end")
+        self.sj_text.configure(state="disabled")
+
+    def _sj_log_line(self, line):
+        """Append a line to the SJ log Text widget (thread-safe via ui_queue)."""
+        self.ui_queue.put(("sj_log", line))
+
+    def _sj_count_kodes(self, event=None):
+        """Parse the Text widget, count valid kode patterns."""
+        text = self.sj_kodes_text.get("1.0", "end").strip()
+        parts = re.split(r"[,\n]+", text)
+        kodes = [p.strip() for p in parts if p.strip()]
+        valid = [k for k in kodes if re.match(r"IT\.\d{4}\.\d{2}\.\d+", k)]
+        self.sj_count_lbl.configure(text=f"{len(valid)} kode terdeteksi")
+        self.sj_kodes = valid
+
+    def _start_sj_download(self):
+        if self.sj_running:
+            return
+        if not self._sj_detect_script():
+            messagebox.showwarning(
+                APP_TITLE,
+                "download_sj_gis.py tidak ditemukan.\n"
+                "Pastikan file ada di folder '3. Download SJ GIS' "
+                "berdampingan dengan folder '2. Import IA'.",
+                parent=self)
+            return
+        self._sj_count_kodes()  # parse latest
+        if not self.sj_kodes:
+            messagebox.showwarning(
+                APP_TITLE,
+                "Masukkan minimal 1 kode SJ (format: IT.2026.09.19805).\n"
+                "Pisahkan multi-kode dengan koma atau baris baru.",
+                parent=self)
+            return
+        if not self._sj_check_chrome():
+            messagebox.showwarning(
+                APP_TITLE,
+                "Chrome debugging (port 9222) belum aktif.\n"
+                "Buka Chrome dengan:\n"
+                "  chrome.exe --remote-debugging-port=9222 "
+                "--user-data-dir=\"C:\\ChromeDebugProfile\"",
+                parent=self)
+            return
+        # save kodes to settings
+        self._save_sj_settings()
+        self.sj_running = True
+        self.sj_stop.clear()
+        self.sj_start_btn.configure(state="disabled")
+        self.sj_stop_btn.configure(state="normal")
+        self.sj_progress["value"] = 0
+        self.sj_progress["maximum"] = max(len(self.sj_kodes), 1)
+        self.sj_counter_lbl.configure(text=f"0 / {len(self.sj_kodes)}")
+        self.sj_status_lbl.configure(text=f"Berjalan — {len(self.sj_kodes)} kode")
+        self._sj_log_line(f"===== Mulai Download SJ GIS: {len(self.sj_kodes)} kode =====")
+        for k in self.sj_kodes:
+            self._sj_log_line(f"  - {k}")
+        threading.Thread(target=self._sj_worker, daemon=True).start()
+
+    def _stop_sj_download(self):
+        if not self.sj_running:
+            return
+        self.sj_stop.set()
+        self.sj_stop_btn.configure(state="disabled")
+        self.sj_status_lbl.configure(text="Menghentikan...")
+        proc = self.sj_proc
+
+        def _graceful():
+            try:
+                if proc is not None and proc.poll() is None:
+                    proc.terminate()
+            except Exception:
+                pass
+        threading.Thread(target=_graceful, daemon=True).start()
+
+    def _sj_worker(self):
+        """Run download_sj_gis.py as subprocess, read stdout, push to ui_queue."""
+        kodes_str = ", ".join(self.sj_kodes)
+        env = {**os.environ,
+               "SJ_GIS_KODES": kodes_str,
+               "IA_UI_MODE": "1",
+               "PYTHONIOENCODING": "utf-8"}
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, self.sj_script_path],
+                cwd=os.path.dirname(self.sj_script_path),
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace", bufsize=1,
+                env=env,
+            )
+        except Exception as e:
+            self.ui_queue.put(("sj_log", f"[ERROR] Gagal menjalankan: {e}"))
+            self.ui_queue.put(("sj_done", (0, len(self.sj_kodes))))
+            return
+        self.sj_proc = proc
+        total = len(self.sj_kodes)
+        for line in proc.stdout:
+            line = line.rstrip("\r\n")
+            if not line:
+                continue
+            self.ui_queue.put(("sj_log", line))
+            # parse progress: [X/Y] pattern (dari output "  [i/total] kode")
+            m = re.search(r"\[(\d+)/(\d+)\]", line)
+            if m:
+                cur = int(m.group(1))
+                tot = int(m.group(2))
+                self.ui_queue.put(("sj_progress", (cur, tot)))
+            # parse [DONE] / [OK] / [FAIL] / [ERROR]
+            if "[DONE]" in line or " [OK] " in line or line.strip().endswith("[OK]"):
+                self.ui_queue.put(("sj_ok", line))
+            elif "[FAIL]" in line or "[ERROR]" in line:
+                self.ui_queue.put(("sj_fail", line))
+        proc.wait()
+        self.ui_queue.put(("sj_done", (None, total)))
+
+    def _save_sj_settings(self):
+        """Save last kodes to ui_settings.json (merge with existing keys)."""
+        data = load_settings()
+        data["sj_kodes"] = ", ".join(self.sj_kodes)
+        if not save_settings(data):
+            self.log("Gagal menyimpan sj_kodes ke ui_settings.json.", "WARN")
+
+    def _load_sj_settings(self):
+        """Load last kodes from ui_settings.json, populate Text widget."""
+        data = load_settings()
+        kodes = (data.get("sj_kodes") or "").strip()
+        if kodes:
+            self.sj_kodes_text.delete("1.0", "end")
+            self.sj_kodes_text.insert("1.0", kodes)
+            self._sj_count_kodes()
 
     def _parse_branches(self):
         raw = self.dl_branches_var.get()
@@ -964,6 +1284,35 @@ class AutoImportApp(tk.Tk):
                     self._detect_dl_folder_state_only()
                     self.dl_status_lbl.configure(text="Gagal. Lihat log.")
                     self._dl_log_line(f"!!!!! {item[1]}")
+                # ---- Download SJ GIS (v4.11) ----
+                elif a == "sj_log":
+                    msg = item[1]
+                    self.sj_text.configure(state="normal")
+                    self.sj_text.insert("end", msg + "\n")
+                    self.sj_text.see("end")
+                    self.sj_text.configure(state="disabled")
+                elif a == "sj_progress":
+                    cur, tot = item[1]
+                    self.sj_progress["maximum"] = max(tot, 1)
+                    self.sj_progress["value"] = cur
+                    self.sj_counter_lbl.configure(text=f"{cur} / {tot}")
+                elif a == "sj_ok":
+                    # optional: bisa color-code baris log hijau; dikosongkan utk sekarang
+                    pass
+                elif a == "sj_fail":
+                    # optional: bisa color-code baris log merah; dikosongkan utk sekarang
+                    pass
+                elif a == "sj_done":
+                    _, total = item[1]
+                    self.sj_running = False
+                    self.sj_start_btn.configure(state="normal")
+                    self.sj_stop_btn.configure(state="disabled")
+                    self.sj_progress["value"] = total if total else 0
+                    self.sj_status_lbl.configure(text="Selesai — lihat log untuk detail")
+                    self.sj_text.configure(state="normal")
+                    self.sj_text.insert("end", "===== Selesai =====\n")
+                    self.sj_text.see("end")
+                    self.sj_text.configure(state="disabled")
         except queue.Empty:
             pass
         self.after(100, self._drain_queue)
@@ -977,11 +1326,21 @@ class AutoImportApp(tk.Tk):
             self._save_settings()
         except Exception:
             pass
+        try:
+            self._save_sj_settings()
+        except Exception:
+            pass
         self.stop_requested.set()
         self.dl_stop.set()
+        self.sj_stop.set()
         try:
             if self.dl_proc is not None and self.dl_proc.poll() is None:
                 self.dl_proc.terminate()
+        except Exception:
+            pass
+        try:
+            if self.sj_proc is not None and self.sj_proc.poll() is None:
+                self.sj_proc.terminate()
         except Exception:
             pass
         self.destroy()
