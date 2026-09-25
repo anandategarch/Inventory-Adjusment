@@ -1,7 +1,33 @@
 """
-download_sj_gis.py  (v8.8)
+download_sj_gis.py  (v8.9)
 =========================
 Download Surat Jalan (SJ) dari modul PEMINDAHAN BARANG Accurate Online (database GiS).
+
+PERBAIKAN v8.9 (dari v8.8):
+  - TUJUAN: fix 2 bug dari v8.8 run (3 kodes: 19805 FAIL E_DOWNLOAD_ICON, 20451 OK,
+    20447 FAIL E_DOWNLOAD_ICON [no document — expected]).
+  - BUG 1 (19805 E_DOWNLOAD_ICON intermittent): dropdown <a> click via ActionChains
+    (smart_click) NGGAK reliably trigger Accurate jQuery dropdown <a> handler —
+    attachment panel nggak kebuka -> E_DOWNLOAD_ICON. 20451 worked (lucky), 19805
+    failed. Same bug class kayak cell click (v8.1) + btnCommentAttachment (v8.3),
+    both fixed dgn JS clickSeq.
+    FIX: click_first_dropdown_item PRIMARY = JS_CLICK_SEQ_SINGLE (native MouseEvent
+    dispatch: pointerdown+mousedown+pointerup+mouseup+click). ActionChains (smart_click)
+    sebagai FALLBACK. Konstanta JS_CLICK_SEQ_SINGLE SUDAH ADA (di-add v8.4 buat
+    btnCommentAttachment) — dipake lg utk dropdown <a>.
+  - BUG 2 (literal 'Tanggal' di filename): user clarify 'Tanggal' di filename format
+    {kode}_Tanggal_{cabang}.{ext} should be ACTUAL DATE VALUE dari detail form
+    (input[name='transDate'], e.g. '24/09/2026'), BUKAN literal word 'Tanggal'.
+    Dari v8.8 dump utk 20451: [14] INPUT:transDate value='24/09/2026'.
+    FIX: tambah extract_tanggal_value() baca input[name='transDate'].value. Format:
+    replace '/' -> '-' jadi '24-09-2026' (readability), lalu sanitize_for_filename.
+    Fallback literal 'Tanggal' kalau nggak terbaca. rename_download_file kini
+    signature (kode, tanggal, cabang) -> {kode}_{tanggal}_{cabang}.{ext}.
+    Contoh: IT.2026.09.20451_24-09-2026_1023.SKTADI.jpg
+  - Download flow steps 1-7 (search -> cell -> detail -> btnCommentAttachment ->
+    dropdown -> attachment -> download) TIDAK diubah, kecuali: click method utk
+    dropdown <a> (Bug 1, step 4) + rename (Bug 2, step 7.7). Cabang extraction
+    (proven working di 20451) TIDAK diubah. close_detail_tab + step 8.5 untouched.
 
 PERBAIKAN v8.8 (dari v8.7):
   - USER CONFIRMED (no more assumptions):
@@ -148,7 +174,8 @@ Flow (berdasarkan RECORDER recording user manual — selector PERSIS):
   5. Click i.icon-download-2 di dalam <a> di attachment panel → DOWNLOAD file
   6. Tutup attachment overlay (button.btn-close)
      → klik tab 'Info Lainnya' di detail form → baca Cabang (KO formData.branch().name,
-       e.g. '1310.GRTSUM') → rename file jadi {kode}_Tanggal_{cabang}.{ext}
+       e.g. '1310.GRTSUM') + baca Tanggal (input[name='transDate'].value, e.g. '24/09/2026'
+       -> '24-09-2026') → rename file jadi {kode}_{tanggal}_{cabang}.{ext}
      → tutup detail tab (i.icon-cancel-2.smaller)
   7. Loop ke kode berikutnya (kalau ada)
 
@@ -161,8 +188,10 @@ Cara pakai:
        IT.2026.09.19805, IT.2026.09.20451, IT.2026.09.20447
 
 Output: file PDF/XLS tersimpan di folder Downloads (1 file per kode).
-       Nama file: {kode}_Tanggal_{cabang}.{ext}
-         (cabang diekstrak dari tab 'Info Lainnya' detail form; fallback 'TanpaCabang').
+       Nama file: {kode}_{tanggal}_{cabang}.{ext}
+         (v8.9: tanggal = date value dari input[name='transDate'], e.g. '24-09-2026';
+          cabang diekstrak dari tab 'Info Lainnya' detail form; fallback 'Tanggal' /
+          'TanpaCabang' kalau nggak terbaca).
 """
 import os
 import sys
@@ -688,7 +717,12 @@ return (function(beforeVisible){
 
 def click_first_dropdown_item(driver, timeout=8):
     """Setelah btnCommentAttachment, tunggu ul.drop-left BARU muncul, klik <a> pertama.
-    FIX v8.1: cuma cari ul.drop-left (bukan ul generik) + exclude Dashboard link."""
+    FIX v8.1: cuma cari ul.drop-left (bukan ul generik) + exclude Dashboard link.
+    FIX v8.9: PRIMARY = JS_CLICK_SEQ_SINGLE (native MouseEvent dispatch). ActionChains
+    (smart_click) NGGAK reliably trigger Accurate jQuery dropdown <a> handler — 19805
+    failed (attachment panel nggak kebuka -> E_DOWNLOAD_ICON), 20451 lucky (kebuka).
+    Same bug class kayak cell click (v8.1 -> v8.2) + btnCommentAttachment (v8.3 -> v8.4),
+    both fixed dgn JS clickSeq. ActionChains dipertahankan sebagai FALLBACK."""
     switch_top(driver)
     # Catat jumlah dropdown visible sebelum (baseline)
     try:
@@ -705,9 +739,20 @@ def click_first_dropdown_item(driver, timeout=8):
                 say(f"      [found] dropdown <a>: text='{ux.get('text','')}' href='{ux.get('href','')[:40]}'")
                 el = find_marked(driver, [], timeout=2)
                 if el:
-                    how = smart_click(driver, el)
-                    clear_mark(driver, [])
-                    return how
+                    # v8.9: PRIMARY = JS clickSeq (native MouseEvent) — ActionChains intermittent
+                    # (19805 failed, 20451 worked). Same bug class as cell click (v8.1->v8.2)
+                    # + btnCommentAttachment (v8.3->v8.4), both fixed with JS clickSeq.
+                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+                    try:
+                        driver.execute_script(JS_CLICK_SEQ_SINGLE, el)
+                        clear_mark(driver, [])
+                        return "JS_CLICKSEQ"
+                    except Exception as e:
+                        say(f"      [WARNING] JS clickSeq gagal: {e}, fallback ActionChains")
+                        clear_mark(driver, [])
+                        how = smart_click(driver, el)
+                        clear_mark(driver, [])
+                        return how
         except: pass
         time.sleep(0.4)
     return None
@@ -1299,6 +1344,30 @@ def extract_cabang_value(driver, timeout=10):
     return None
 
 
+def extract_tanggal_value(driver, timeout=5):
+    """v8.9: baca value input[name='transDate'] dari detail form = tanggal transaksi.
+    Dari v8.8 dump utk 20451: [14] INPUT:transDate value='24/09/2026'. Ini DATE VALUE
+    sebenarnya (BUKAN literal 'Tanggal' yg dipake v8.3-v8.8 di filename).
+    Return string tanggal (e.g. '24/09/2026') atau None kalau nggak ketemu.
+    Caller (process_one_kode 7.6) replace '/' -> '-' jadi '24-09-2026' utk readability,
+    lalu sanitize_for_filename strip sisa forbidden chars. Fallback literal 'Tanggal'
+    kalau None (supaya filename tetap jalan)."""
+    end = time.time() + timeout
+    while time.time() < end:
+        switch_top(driver)
+        try:
+            val = driver.execute_script("""
+                var inp = document.querySelector("input[name='transDate']");
+                if (inp && inp.value) return inp.value;
+                return null;
+            """)
+            if val:
+                return val
+        except: pass
+        time.sleep(0.5)
+    return None
+
+
 def sanitize_for_filename(value):
     """Buang karakter Windows-forbidden + control chars (newline, tab, dll) utk filename.
     Titik DIPERTAHANKAN (format cabang spt '1310.GRTSUM' butuh titik utuh).
@@ -1316,10 +1385,14 @@ def sanitize_for_filename(value):
     return value
 
 
-def rename_download_file(original_path, kode, cabang):
-    """Rename file ke {kode}_Tanggal_{cabang}.{ext}.
+def rename_download_file(original_path, kode, tanggal, cabang):
+    """Rename file ke {kode}_{tanggal}_{cabang}.{ext}. v8.9: tanggal = date value from form.
+    v8.9 (dari v8.8): sebelumnya filename pakai literal 'Tanggal' (BUKAN date value).
+    User clarify 'Tanggal' should be ACTUAL DATE dari input[name='transDate'] (e.g.
+    '24/09/2026' -> diformat '24-09-2026'). Fallback literal 'Tanggal' kalau None.
     - ext = os.path.splitext(original_path)[1]  (pertahankan .pdf / .xls / .xlsx asli)
     - cabang None/empty/unsanitizable -> fallback 'TanpaCabang'
+    - tanggal None/empty/unsanitizable -> fallback 'Tanggal' (v8.3-v8.8 literal behavior)
     - Retry rename 3x (0.5s) utk antisipasi file masih locked Chrome sesaat setelah download
     - Kalau target sudah ada, tambahkan suffix _1, _2, dst biar nggak overwrite
     - Return path baru, atau path asli kalau rename gagal (file tetap ada, cuma nggak ke-rename)
@@ -1330,14 +1403,17 @@ def rename_download_file(original_path, kode, cabang):
     safe_cabang = sanitize_for_filename(cabang) if cabang else ""
     if not safe_cabang:
         safe_cabang = "TanpaCabang"
-    new_name = f"{kode}_Tanggal_{safe_cabang}{ext}"
+    safe_tanggal = sanitize_for_filename(tanggal) if tanggal else ""
+    if not safe_tanggal:
+        safe_tanggal = "Tanggal"  # fallback literal (v8.3-v8.8 behavior)
+    new_name = f"{kode}_{safe_tanggal}_{safe_cabang}{ext}"
     folder = os.path.dirname(original_path)
     new_path = os.path.join(folder, new_name)
     # Kalau target sudah ada, tambah suffix _1, _2, dst biar nggak overwrite
     if os.path.exists(new_path):
         i = 1
         while os.path.exists(new_path):
-            new_path = os.path.join(folder, f"{kode}_Tanggal_{safe_cabang}_{i}{ext}")
+            new_path = os.path.join(folder, f"{kode}_{safe_tanggal}_{safe_cabang}_{i}{ext}")
             i += 1
     # Retry rename 3x (file mungkin masih locked oleh Chrome sesaat setelah download selesai)
     for attempt in range(3):
@@ -1446,8 +1522,8 @@ def process_one_kode(driver, kode, fr, seq, total):
         say(f"  [7.5/8] Tutup attachment overlay (buka akses ke detail form)...")
         close_attachment_overlay(driver, timeout=5)
 
-        # 7.6 Klik tab 'Info Lainnya' + extract Cabang (v8.3)
-        say(f"  [7.6/8] Klik tab 'Info Lainnya' + extract Cabang...")
+        # 7.6 Klik tab 'Info Lainnya' + extract Cabang (v8.3) + extract Tanggal (v8.9)
+        say(f"  [7.6/8] Klik tab 'Info Lainnya' + extract Cabang + Tanggal...")
         if click_info_lainnya_tab(driver, timeout=8):
             cabang = extract_cabang_value(driver, timeout=10)
             if cabang:
@@ -1456,13 +1532,25 @@ def process_one_kode(driver, kode, fr, seq, total):
             else:
                 cabang = "TanpaCabang"
                 say(f"    [WARNING] Cabang tidak terbaca, pakai fallback: {cabang}")
+            # v8.9: extract Tanggal (date value from input[name='transDate']).
+            # Dari v8.8 dump utk 20451: [14] INPUT:transDate value='24/09/2026'.
+            # Format: replace '/' -> '-' -> '24-09-2026'. Fallback literal 'Tanggal'.
+            tanggal_raw = extract_tanggal_value(driver, timeout=5)
+            if tanggal_raw:
+                tanggal = tanggal_raw.replace('/', '-')  # "24/09/2026" -> "24-09-2026"
+                tanggal = sanitize_for_filename(tanggal)
+                say(f"    [OK] Tanggal: {tanggal}")
+            else:
+                tanggal = "Tanggal"  # fallback literal (v8.3-v8.8 behavior)
+                say(f"    [WARNING] Tanggal tidak terbaca, pakai literal: {tanggal}")
         else:
             cabang = "TanpaCabang"
-            say(f"    [WARNING] Tab 'Info Lainnya' tidak ditemukan, pakai fallback: {cabang}")
+            tanggal = "Tanggal"
+            say(f"    [WARNING] Tab 'Info Lainnya' tidak ditemukan, pakai fallback: cabang={cabang}, tanggal={tanggal}")
 
-        # 7.7 Rename file: {kode}_Tanggal_{cabang}.{ext}
-        say(f"  [7.7/8] Rename file: {kode}_Tanggal_{cabang}{os.path.splitext(final)[1]}...")
-        final = rename_download_file(final, kode, cabang)
+        # 7.7 Rename file: {kode}_{tanggal}_{cabang}.{ext}  (v8.9: tanggal = date value)
+        say(f"  [7.7/8] Rename file: {kode}_{tanggal}_{cabang}{os.path.splitext(final)[1]}...")
+        final = rename_download_file(final, kode, tanggal, cabang)
         fname = os.path.basename(final)
         say(f"    [OK] File renamed: {fname}")
 
@@ -1504,7 +1592,7 @@ def process_one_kode(driver, kode, fr, seq, total):
 
 def main():
     say("=" * 60)
-    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.8)")
+    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.9)")
     say("=" * 60)
     say(f"Folder download: {DOWNLOAD_DIR}")
     if not os.path.isdir(DOWNLOAD_DIR):

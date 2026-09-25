@@ -1,18 +1,18 @@
 @echo off
 setlocal
 chcp 65001 >nul
-title Download SJ GIS - Pemindahan Barang (v8.8)
+title Download SJ GIS - Pemindahan Barang (v8.9)
 color 0A
 cls
 echo ============================================================
-echo   DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.8)
+echo   DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.9)
 echo ============================================================
-echo  v8.8 — remove harmful recover_to_list_view (btnToggleList is TOGGLE) + verify close_detail_tab + wait search box
+echo  v8.9 — JS clickSeq for dropdown ^<a^> (fix 19805 E_DOWNLOAD_ICON) + date value in filename
 echo.
 echo  Alur (berdasarkan recording manual user):
 echo    search ^> klik cell ^> detail ^> btnCommentAttachment
 echo    ^> dropdown ^> attachment panel ^> icon-download-2 ^> file
-echo    ^> tutup overlay ^> tab Info Lainnya ^> extract Cabang ^> rename
+echo    ^> tutup overlay ^> tab Info Lainnya ^> extract Cabang + Tanggal ^> rename
 echo.
 echo  Prasyarat (PASTIKAN sebelum tekan ENTER):
 echo   1. Chrome debugging SUDAH terbuka (port 9222)
