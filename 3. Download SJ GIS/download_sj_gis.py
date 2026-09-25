@@ -1,7 +1,39 @@
 """
-download_sj_gis.py  (v8.10)
+download_sj_gis.py  (v8.11)
 =========================
 Download Surat Jalan (SJ) dari modul PEMINDAHAN BARANG Accurate Online (database GiS).
+
+PERBAIKAN v8.11 (dari v8.10):
+  - TUJUAN: fix intermittent E_DOWNLOAD_ICON utk kode 19805 (v8.9 OK, v8.10 FAIL,
+    kode yg SAMA — bukan logic bug, tapi TIMING bug).
+  - PROVEN ROOT CAUSE (user manually verified, NOT assumption):
+    1. Dropdown item text "Dokumen *" (WITH asterisk) = transaction HAS a document
+       -> klik -> attachment panel kebuka -> download works.
+    2. Dropdown item text "Dokumen" (NO asterisk) = transaction has NO document
+       -> no need to click (current E_DROPDOWN handling OK).
+    3. Utk kode IT.2026.09.19805: MANUALLY dropdown shows "Dokumen *" (asterisk)
+       + panel kebuka + document exists.
+    4. But TOOL v8.10 read "Dokumen" (NO asterisk) utk 19805 -> klik -> panel
+       NGGAK kebuka -> E_DOWNLOAD_ICON -> FAIL.
+    Contradiction (manual "Dokumen *", tool reads "Dokumen" utk SAME kode) = TIMING.
+    Cause = tool reads dropdown TOO FAST after btnCommentAttachment click:
+      (a) Click btnCommentAttachment -> dropdown opens, initially shows "Dokumen"
+          (no asterisk).
+      (b) Accurate AJAX updates the dropdown -> "Dokumen *" (asterisk appears,
+          indicating document exists).
+      (c) Tool reads at step (a) BEFORE step (b) AJAX completes -> gets "Dokumen"
+          -> clicks -> panel nggak kebuka -> E_DOWNLOAD_ICON.
+    Evidence of intermittency: v8.9 read "Dokumen *" utk 19805 (OK), v8.10 read
+    "Dokumen" (FAIL). Same kode, different timing -> different text read.
+  - FIX 1: click_first_dropdown_item WAIT 1.5s at START (before find loop) — kasih
+    waktu AJAX Accurate update dropdown asterisk ('Dokumen' -> 'Dokumen *' kalau
+    ada dokumen). Tanpa wait, tool baca 'Dokumen' (no asterisk) -> klik -> panel
+    nggak kebuka -> FAIL (intermittent timing bug).
+  - FIX 2: JS_FIND_NEW_DROPDOWN_A PREFER "Dokumen *" (asterisk = has document).
+    Only return <a> with text containing '*'. 'Dokumen' (no asterisk) -> skip ->
+    null -> E_DROPDOWN (honest, no document). User confirmed: 'Dokumen' (no
+    asterisk) = no document, current E_DROPDOWN handling OK.
+  - Download flow steps 1-7 TIDAK diubah. Hanya timing (Fix 1) + JS filter (Fix 2).
 
 PERBAIKAN v8.9 (dari v8.8):
   - TUJUAN: fix 2 bug dari v8.8 run (3 kodes: 19805 FAIL E_DOWNLOAD_ICON, 20451 OK,
@@ -707,6 +739,11 @@ return (function(beforeVisible){
       // EXCLUDE link Dashboard/main-menu (href #module-accurate__dashboard)
       var href = (a.getAttribute('href')||'');
       if (href.indexOf('dashboard') !== -1) continue;
+      // v8.11: PREFER "Dokumen *" (asterisk = has document). Only return <a> with
+      // text containing '*'. 'Dokumen' (no asterisk) -> skip -> null -> E_DROPDOWN
+      // (honest, no document). User confirmed: 'Dokumen' (no asterisk) = no document,
+      // no need to click, current E_DROPDOWN handling OK.
+      if (t.indexOf('*') === -1) continue;  // skip 'Dokumen' (no asterisk) — no document
       a.setAttribute(ATTR,'1');
       return {text:t, href:href.slice(0,80), idx:i};
     }
@@ -716,14 +753,24 @@ return (function(beforeVisible){
 """
 
 def click_first_dropdown_item(driver, timeout=8):
-    """Setelah btnCommentAttachment, tunggu ul.drop-left BARU muncul, klik <a> pertama.
+    """Setelah btnCommentAttachment, tunggu ul.drop-left BARU muncul, klik <a> 'Dokumen *'.
     FIX v8.1: cuma cari ul.drop-left (bukan ul generik) + exclude Dashboard link.
     FIX v8.9: PRIMARY = JS_CLICK_SEQ_SINGLE (native MouseEvent dispatch). ActionChains
     (smart_click) NGGAK reliably trigger Accurate jQuery dropdown <a> handler — 19805
     failed (attachment panel nggak kebuka -> E_DOWNLOAD_ICON), 20451 lucky (kebuka).
     Same bug class kayak cell click (v8.1 -> v8.2) + btnCommentAttachment (v8.3 -> v8.4),
-    both fixed dgn JS clickSeq. ActionChains dipertahankan sebagai FALLBACK."""
+    both fixed dgn JS clickSeq. ActionChains dipertahankan sebagai FALLBACK.
+    FIX v8.11: WAIT 1.5s di awal — kasih waktu AJAX Accurate update dropdown asterisk
+    ('Dokumen' -> 'Dokumen *' kalau ada dokumen). Tanpa wait, tool baca 'Dokumen'
+    (no asterisk) -> klik -> panel nggak kebuka -> FAIL (intermittent timing bug).
+    Evidence: v8.9 read 'Dokumen *' utk 19805 (OK), v8.10 read 'Dokumen' (FAIL). Same
+    kode, different timing -> different text read. PLUS JS_FIND_NEW_DROPDOWN_A v8.11
+    PREFER 'Dokumen *' (asterisk) — 'Dokumen' (no asterisk) -> null -> E_DROPDOWN."""
     switch_top(driver)
+    # v8.11: WAIT 1.5s — biar AJAX update asterisk di dropdown item
+    # ('Dokumen' -> 'Dokumen *' kalau ada dokumen). Tanpa wait, tool baca 'Dokumen'
+    # (no asterisk) -> klik -> panel nggak kebuka -> FAIL (intermittent timing bug).
+    time.sleep(1.5)
     # Catat jumlah dropdown visible sebelum (baseline)
     try:
         before = driver.execute_script(JS_COUNT_DROPLEFT) or {"visible":0}
@@ -1580,7 +1627,7 @@ def process_one_kode(driver, kode, fr, seq, total):
 
 def main():
     say("=" * 60)
-    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.10)")
+    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.11)")
     say("=" * 60)
     say(f"Folder download: {DOWNLOAD_DIR}")
     if not os.path.isdir(DOWNLOAD_DIR):

@@ -1,13 +1,14 @@
 @echo off
 setlocal
 chcp 65001 >nul
-title Download SJ GIS - Pemindahan Barang (v8.10)
+title Download SJ GIS - Pemindahan Barang (v8.11)
 color 0A
 cls
 echo ============================================================
-echo   DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.10)
+echo   DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.11)
 echo ============================================================
-echo  v8.10 — remove step 4.5 dump + 4.6 verify (focus shift fix for E_DOWNLOAD_ICON)
+echo  v8.11 — wait 1.5s after btnCommentAttachment + prefer 'Dokumen *' (asterisk)
+echo  Fix intermittent E_DOWNLOAD_ICON (19805 v8.9 OK, v8.10 FAIL = TIMING bug)
 echo.
 echo  Alur (berdasarkan recording manual user):
 echo    search ^> klik cell ^> detail ^> btnCommentAttachment
