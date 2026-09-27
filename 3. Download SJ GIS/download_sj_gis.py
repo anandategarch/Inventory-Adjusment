@@ -1,7 +1,20 @@
 """
-download_sj_gis.py  (v8.12)
+download_sj_gis.py  (v8.13)
 =========================
 Download Surat Jalan (SJ) dari modul PEMINDAHAN BARANG Accurate Online (database GiS).
+
+PERBAIKAN v8.13 (dari v8.12):
+  - TUJUAN: kasih marker machine-readable di akhir main() biar UI (ui_app.py)
+    bisa parse kode mana aja yg OK / GAGAL tanpa ngaruh ke format ringkasan
+    human-readable (text-wrapping, spasi, prefix [OK]/[FAIL] dll).
+  - Setelah loop ringkasan + sebelum baris '====' penutup, output 2 marker:
+      SJ_RESULT_OK: IT.2026.09.19805
+      SJ_RESULT_FAIL: IT.2026.09.20451, IT.2026.09.20447
+    Kalau gagal 0 -> 'SJ_RESULT_FAIL: ' (kosong setelah colon).
+  - UI (tab Download SJ GIS, ui_app.py v4.13) parse SJ_RESULT_FAIL -> tampil di
+    Card 4 'Kode Gagal' + tombol Copy / Pindahkan ke Input (untuk retry).
+  - Download flow steps 1-8, JS clickSeq, timing, JS_FIND_NEW_DROPDOWN_A,
+    input() guard utk UI mode — SEMUA TIDAK diubah.
 
 PERBAIKAN v8.12 (dari v8.11):
   - TUJUAN: dukung pemanggilan via subprocess dari tab "Download SJ GIS"
@@ -1641,7 +1654,7 @@ def process_one_kode(driver, kode, fr, seq, total):
 
 def main():
     say("=" * 60)
-    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.12)")
+    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.13)")
     say("=" * 60)
     say(f"Folder download: {DOWNLOAD_DIR}")
     if not os.path.isdir(DOWNLOAD_DIR):
@@ -1701,6 +1714,15 @@ def main():
     say(f"\n  Berhasil: {success}/{len(kodes)}")
     say(f"  Folder   : {DOWNLOAD_DIR}")
     say("=" * 60)
+
+    # v8.13: output marker lines for UI parsing (placed AFTER the human-readable
+    # summary loop, BEFORE the final closing banner). UI (ui_app.py v4.13)
+    # parses the 'SJ_RESULT_FAIL:' line to populate the 'Kode Gagal' card.
+    # If a list is empty -> marker still emitted with empty payload after colon.
+    ok_kodes = [kode for kode, ok, result in results if ok]
+    failed_kodes = [kode for kode, ok, result in results if not ok]
+    say(f"SJ_RESULT_OK: {', '.join(ok_kodes)}")
+    say(f"SJ_RESULT_FAIL: {', '.join(failed_kodes)}")
 
 if __name__ == "__main__":
     try:

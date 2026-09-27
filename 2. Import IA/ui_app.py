@@ -1,6 +1,14 @@
 """
-ui_app.py — tampilan aplikasi Import IA (v4.12, pasangan accurate_bot.py v4.7).
+ui_app.py — tampilan aplikasi Import IA (v4.13, pasangan accurate_bot.py v4.7).
 Tab: Otomasi | Database COA & Keterangan | Download Draft IA | Download SJ GIS.
+v4.13: Card 4 "Kode Gagal" di tab Download SJ GIS (row 2, di bawah Log card,
+compact fixed-height). Pasangan download_sj_gis.py v8.13. Worker parse
+marker 'SJ_RESULT_FAIL: <kodes>' dari stdout subprocess, push ke ui_queue
+tag 'sj_failed'. _drain_queue handle 'sj_failed' -> _sj_set_failed_kodes
+populate Text widget (red if ada gagal, gray placeholder 'Tidak ada kode
+gagal' jika 0). Title label update count: '4. Kode Gagal (N)'. 3 tombol:
+Copy (clipboard), Pindahkan ke Input (replace input box utk retry), Bersihkan.
+_start_sj_download clear failed list on new run.
 v4.12: tombol "Buka Chrome 9222" di Card 2 (Kontrol) tab Download SJ GIS —
 meluncurkan chrome.exe dengan --remote-debugging-port=9222 +
 --user-data-dir=C:\\ChromeDebugProfile lalu buka https://accurate.id.
@@ -290,6 +298,10 @@ class AutoImportApp(tk.Tk):
         self.sj_proc = None
         self.sj_kodes = []
         self.sj_script_path = None
+        # v4.13: list kode yg GAGAL di run terakhir (diparse dari marker
+        # 'SJ_RESULT_FAIL:' line by _sj_worker). Di-populate ke Card 4
+        # 'Kode Gagal' via _sj_set_failed_kodes. Reset tiap _start_sj_download.
+        self.sj_failed_kodes = []
 
         self._setup_style()
         self._build_ui()
@@ -680,6 +692,39 @@ class AutoImportApp(tk.Tk):
         ttk.Button(sj_log_btns, text="Bersihkan",
                    command=self._sj_clear).pack(side="right")
 
+        # ---- Card 4: Kode Gagal (v4.13, row 2, col 0+1, compact fixed height) ----
+        # Built manually (NOT via _card() helper) so we can keep a reference to
+        # the title Label and update its text with the failed-count later
+        # (e.g. '4. Kode Gagal (2)').
+        sj_fail_card = ttk.Frame(sjview, style="Card.TFrame", padding=0)
+        sj_fail_card.grid(row=2, column=0, columnspan=2, sticky="ew", padx=0, pady=(8, 0))
+        sj_fail_card.columnconfigure(0, weight=1)
+        self.sj_fail_title_lbl = tk.Label(sj_fail_card, text="4. Kode Gagal (0)",
+                                         bg=C_CARD, fg="#111827",
+                                         font=F_CARD, anchor="w")
+        self.sj_fail_title_lbl.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 4))
+        # Text widget (read-only, height 3) — shows failed kodes comma-separated.
+        # Red text on light bg when failures, gray placeholder when none.
+        sj_fail_wrap = tk.Frame(sj_fail_card, bg=C_INFO_BG)
+        sj_fail_wrap.grid(row=1, column=0, sticky="ew", padx=14, pady=(4, 4))
+        sj_fail_wrap.columnconfigure(0, weight=1)
+        self.sj_failed_text = tk.Text(sj_fail_wrap, height=3, bg=C_INFO_BG, fg="#94a3b8",
+                                     font=F_LOG, wrap="word", relief="flat",
+                                     state="disabled", padx=8, pady=6)
+        self.sj_failed_text.grid(row=0, column=0, sticky="ew")
+        # No scrollbar (compact). The text is usually short.
+        # Buttons row.
+        sj_fail_btns = tk.Frame(sj_fail_card, bg=C_CARD)
+        sj_fail_btns.grid(row=2, column=0, sticky="ew", padx=14, pady=(0, 10))
+        ttk.Button(sj_fail_btns, text="\U0001f4cb Copy",
+                   command=self._sj_copy_failed).pack(side="left", padx=(0, 8))
+        ttk.Button(sj_fail_btns, text="\u21a9 Pindahkan ke Input",
+                   command=self._sj_move_failed_to_input).pack(side="left", padx=(0, 8))
+        ttk.Button(sj_fail_btns, text="Bersihkan",
+                   command=self._sj_clear_failed).pack(side="left")
+        # Initial populate (shows placeholder 'Tidak ada kode gagal').
+        self._sj_set_failed_kodes([])
+
         # ---- Inisialisasi indikator SJ (auto-detect script + cek chrome + load kodes) ----
         self._sj_detect_script()
         self._sj_check_chrome()
@@ -941,6 +986,76 @@ class AutoImportApp(tk.Tk):
         self.sj_count_lbl.configure(text=f"{len(valid)} kode terdeteksi")
         self.sj_kodes = valid
 
+    # ================= KODE GAGAL CARD (v4.13) =================
+    def _sj_set_failed_kodes(self, kodes_list):
+        """Populate the 'Kode Gagal' card with failed kodes.
+
+        Called from _drain_queue (tag 'sj_failed') after _sj_worker parses the
+        'SJ_RESULT_FAIL: <kodes>' marker line emitted by download_sj_gis.py
+        v8.13. Also called directly from _start_sj_download (with []) to clear
+        the card before a new run, and from _sj_clear_failed.
+        """
+        self.sj_failed_kodes = list(kodes_list)
+        # Update title with count.
+        self.sj_fail_title_lbl.configure(text=f"4. Kode Gagal ({len(self.sj_failed_kodes)})")
+        # Update text widget.
+        self.sj_failed_text.configure(state="normal")
+        self.sj_failed_text.delete("1.0", "end")
+        if self.sj_failed_kodes:
+            self.sj_failed_text.insert("1.0", ", ".join(self.sj_failed_kodes))
+            self.sj_failed_text.configure(fg="#dc2626")  # red
+        else:
+            # Gray placeholder — indicate no failures.
+            self.sj_failed_text.insert("1.0", "Tidak ada kode gagal \u2713")
+            self.sj_failed_text.configure(fg="#94a3b8")  # slate-400
+        self.sj_failed_text.configure(state="disabled")
+
+    def _sj_copy_failed(self):
+        """Copy failed kodes (comma-separated) to system clipboard."""
+        if not self.sj_failed_kodes:
+            messagebox.showinfo(APP_TITLE, "Tidak ada kode gagal untuk di-copy.",
+                                parent=self)
+            return
+        text = ", ".join(self.sj_failed_kodes)
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self.update()  # ensure clipboard is set on X11
+        self._sj_log_line(
+            f"[INFO] {len(self.sj_failed_kodes)} kode gagal disalin ke clipboard.")
+        messagebox.showinfo(
+            APP_TITLE,
+            f"{len(self.sj_failed_kodes)} kode gagal disalin ke clipboard:\n"
+            f"{text[:200]}",
+            parent=self)
+
+    def _sj_move_failed_to_input(self):
+        """Move failed kodes into the Input Kode SJ text box (replace content).
+
+        Enables quick retry: user clicks 'Pindahkan ke Input' then 'Mulai
+        Download' again. Only the failed subset is re-run.
+        """
+        if not self.sj_failed_kodes:
+            messagebox.showinfo(APP_TITLE, "Tidak ada kode gagal untuk di-retry.",
+                                parent=self)
+            return
+        text = ", ".join(self.sj_failed_kodes)
+        self.sj_kodes_text.delete("1.0", "end")
+        self.sj_kodes_text.insert("1.0", text)
+        self._sj_count_kodes()  # update count + re-parse self.sj_kodes
+        self._sj_log_line(
+            f"[INFO] {len(self.sj_failed_kodes)} kode gagal dipindahkan ke input. "
+            "Klik 'Mulai Download' untuk retry.")
+        messagebox.showinfo(
+            APP_TITLE,
+            f"{len(self.sj_failed_kodes)} kode gagal dipindahkan ke input.\n"
+            "Klik 'Mulai Download' untuk retry.",
+            parent=self)
+
+    def _sj_clear_failed(self):
+        """Clear the failed-kodes list + reset the card to placeholder."""
+        self._sj_set_failed_kodes([])
+        self._sj_log_line("[INFO] List kode gagal dibersihkan.")
+
     def _start_sj_download(self):
         if self.sj_running:
             return
@@ -979,6 +1094,9 @@ class AutoImportApp(tk.Tk):
         self.sj_progress["maximum"] = max(len(self.sj_kodes), 1)
         self.sj_counter_lbl.configure(text=f"0 / {len(self.sj_kodes)}")
         self.sj_status_lbl.configure(text=f"Berjalan — {len(self.sj_kodes)} kode")
+        # v4.13: clear previous failed list (a new run replaces last run's
+        # failures; populated again when worker parses SJ_RESULT_FAIL marker).
+        self._sj_set_failed_kodes([])
         self._sj_log_line(f"===== Mulai Download SJ GIS: {len(self.sj_kodes)} kode =====")
         for k in self.sj_kodes:
             self._sj_log_line(f"  - {k}")
@@ -1032,6 +1150,19 @@ class AutoImportApp(tk.Tk):
                 cur = int(m.group(1))
                 tot = int(m.group(2))
                 self.ui_queue.put(("sj_progress", (cur, tot)))
+            # v4.13: parse machine-readable marker lines emitted by
+            # download_sj_gis.py v8.13 at the end of main():
+            #   'SJ_RESULT_OK: IT.2026.09.19805'
+            #   'SJ_RESULT_FAIL: IT.2026.09.20451, IT.2026.09.20447'
+            # Empty payload after the colon = none (e.g. 'SJ_RESULT_FAIL: ').
+            # Only SJ_RESULT_FAIL is consumed by the UI (to populate Card 4).
+            if line.startswith("SJ_RESULT_FAIL:"):
+                fail_str = line[len("SJ_RESULT_FAIL:"):].strip()
+                if fail_str:
+                    failed = [k.strip() for k in fail_str.split(",") if k.strip()]
+                else:
+                    failed = []
+                self.ui_queue.put(("sj_failed", failed))
             # parse [DONE] / [OK] / [FAIL] / [ERROR]
             if "[DONE]" in line or " [OK] " in line or line.strip().endswith("[OK]"):
                 self.ui_queue.put(("sj_ok", line))
@@ -1369,6 +1500,12 @@ class AutoImportApp(tk.Tk):
                 elif a == "sj_fail":
                     # optional: bisa color-code baris log merah; dikosongkan utk sekarang
                     pass
+                elif a == "sj_failed":
+                    # v4.13: payload = list of failed kode strings (diparse dari
+                    # marker 'SJ_RESULT_FAIL:' line oleh _sj_worker). Populate
+                    # Card 4 'Kode Gagal'. Empty list -> placeholder text.
+                    failed_list = item[1]
+                    self._sj_set_failed_kodes(failed_list)
                 elif a == "sj_done":
                     _, total = item[1]
                     self.sj_running = False
