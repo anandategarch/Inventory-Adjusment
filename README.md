@@ -11,11 +11,12 @@ Dibangun dengan Python + Selenium. Dijalankan dari laptop via Chrome dengan **Re
 Inventory-Adjusment/
 ├── 1. Download Draft IA/      # Tool untuk mengunduh draf IA per transaksi
 ├── 2. Import IA/              # Tool untuk mengimpor IA ke Accurate (UI Tkinter)
-└── 3. Download SJ GIS/       # (kosong — akan diisi nanti)
+├── 3. Download SJ GIS/       # Tool download Surat Jalan dari modul Pemindahan Barang
+└── 4. Screen Shot Power BI/  # Tool screenshot otomatis dashboard Power BI (Playwright)
 ```
 
-> **Catatan:** Folder `3. Download SJ GIS` sengaja dikosongkan dulu.
-> Tooling-nya akan ditambahkan kemudian.
+> **Catatan:** Folder `3. Download SJ GIS` dan `4. Screen Shot Power BI`
+> bisa dijalankan langsung dari tab di UI `2. Import IA/ui_app.py` (v4.14+).
 
 ---
 
@@ -123,6 +124,67 @@ Detail lengkap mode & pengaman data ada di `2. Import IA/README.txt`.
 | `JALANKAN_DETEKSI.bat` | Peluncur versi Python deteksi |
 
 Dipakai saat pengembangan untuk membaca struktur DOM halaman. Tidak dipakai di alur final.
+
+---
+
+## 4. Screen Shot Power BI
+
+> **Status: V16 — Optimized + Reliability Fix.**
+> Screenshot otomatis dashboard Power BI (per page × per resto) memakai Playwright + Chromium.
+
+### Cara pakai (via UI Import IA)
+
+1. Jalankan `2. Import IA/MULAI_OTOMASI.bat` lalu buka tab **"Screen Shot Power BI"**.
+2. Card **1. Konfigurasi** — isi:
+   - **Power BI URL** (URL lengkap `app.powerbi.com/view?r=...`)
+   - **Pages** — nomor halaman, mis. `19,20,21,22` atau range `19-22`
+   - **Output Folder** — lokasi simpan screenshot
+   - **Format** — `PNG` atau `PDF`
+3. Card **2. Resto & Opsi** — ketik daftar resto (satu per baris) + centang opsi V16
+   (Sequential page nav, Reuse stable screenshot, Merge final stability,
+   Light recovery, Force-click Next Page, Smart resto transition — experimental).
+4. Klik **▶ Mulai Screenshot**. Log muncul di Card **3. Log Screenshot**.
+   Pakai **■ Hentikan** untuk stop, **📁 Buka Output** untuk buka folder hasil.
+
+### Cara pakai (standalone, tanpa UI Import IA)
+
+1. Jalankan `4. Screen Shot Power BI/START_HERE.vbs` (memanggil `launch.bat`).
+   Script otomatis: bikin `.venv` lokal → pasang Playwright + Chromium → jalankan `app.py`.
+2. Atau manual: `python app.py` (Tk UI standalone, sama seperti yang dipakai UI).
+
+### Headless mode (`--cli`)
+
+`app.py` mendukung `python app.py --cli` — mode headless yang baca `config.json`
+lalu log progress ke **stdout** (untuk dipanggil sebagai subprocess oleh UI lain).
+Marker yang dipancarkan:
+
+- `PROGRESS: <cur>/<total> <label>` — per-job progress
+- `DONE: success=<N> failed=<N>` — akhir batch
+- `ERROR: <msg>` — fatal exception
+
+Tab **Screen Shot Power BI** di `2. Import IA/ui_app.py` memakai mode `--cli`
+ini: form di UI → simpan `config.json` → subprocess `app.py --cli` → parse
+stdout → progressbar + log widget.
+
+### File
+
+| File | Fungsi |
+|------|--------|
+| `app.py` | Tool utama: Playwright Engine + Tk UI + `--cli` headless mode |
+| `config.json` | Konfigurasi (URL, pages, restos, opsi V16, timing, output) — sumber kebenaran, dibaca + ditulis UI dan `app.py` |
+| `requirements.txt` | `playwright`, `Pillow` |
+| `launch.bat` | Setup `.venv` + Playwright + Chromium, lalu jalankan `app.py` |
+| `RUN.bat` | Peluncur cepat (langsung `app.py` via `.venv`) |
+| `START_HERE.vbs` | Peluncur Windows (klik double, panggil `launch.bat` tanpa jendela CMD) |
+| `build_exe.bat` | (Opsional) Build standalone `.exe` via PyInstaller |
+| `README_V14.txt` / `README_V15.txt` / `README_V16.txt` | Catatan rilis tiap versi |
+
+### Dependensi
+
+- **Python 3.10+** (recommend 3.13 x64)
+- **Playwright** + **Chromium** — dipasang otomatis oleh `launch.bat` (atau
+  oleh `ensure_playwright()` di `app.py` saat runtime bila belum ada)
+- Tidak butuh Chrome Remote Debugging (tool ini pakai Chromium bawaan Playwright)
 
 ---
 

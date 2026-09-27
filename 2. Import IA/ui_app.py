@@ -1,6 +1,19 @@
 """
-ui_app.py — tampilan aplikasi Import IA (v4.13, pasangan accurate_bot.py v4.7).
-Tab: Otomasi | Database COA & Keterangan | Download Draft IA | Download SJ GIS.
+ui_app.py — tampilan aplikasi Import IA (v4.14, pasangan accurate_bot.py v4.7).
+Tab: Otomasi | Database COA & Keterangan | Download Draft IA | Download SJ GIS | Screen Shot Power BI.
+v4.14: tab kelima "Screen Shot Power BI" — menjalankan app.py (folder
+'4. Screen Shot Power BI') sebagai subprocess `app.py --cli`. 3 cards:
+(1) Konfigurasi: Power BI URL + Pages + Output folder + Format (PNG/PDF);
+(2) Resto & Opsi: Text multi-utk daftar resto + 6 V16 checkboxes (sequential
+nav / smart transition / reuse screenshot / merge stability / light recovery /
+force-click Next Page) + tombol Mulai / Hentikan / Buka Output + progressbar
++ status label; (3) Log terminal-style + scrollbar + Bersihkan. UI baca +
+tulis config.json di folder 4 (sumber kebenaran). _ss_worker menjalankan
+subprocess, parse stdout line-by-line; marker 'PROGRESS: cur/total label'
+-> progress bar, 'DONE: success=N failed=N' -> status, sisanya -> log
+widget. Auto-detect path app.py via _ss_detect_script (relatif ke file ini).
+Playwright + Chromium wajib terpasang (dipasang otomatis oleh launch.bat di
+folder 4, atau oleh ensure_playwright() di app.py saat runtime).
 v4.13: Card 4 "Kode Gagal" di tab Download SJ GIS (row 2, di bawah Log card,
 compact fixed-height). Pasangan download_sj_gis.py v8.13. Worker parse
 marker 'SJ_RESULT_FAIL: <kodes>' dari stdout subprocess, push ke ui_queue
@@ -303,6 +316,15 @@ class AutoImportApp(tk.Tk):
         # 'Kode Gagal' via _sj_set_failed_kodes. Reset tiap _start_sj_download.
         self.sj_failed_kodes = []
 
+        # ---- Screen Shot Power BI (tab kelima, v4.14) ----
+        # app.py di folder '4. Screen Shot Power BI' (berdampingan dgn folder
+        # '2. Import IA' ini). Dijalankan sebagai subprocess `app.py --cli`.
+        # Lihat _ss_worker + _ss_detect_script + _ss_load_config + _ss_save_config.
+        self.ss_running = False
+        self.ss_stop = threading.Event()
+        self.ss_proc = None
+        self.ss_script_path = None
+
         self._setup_style()
         self._build_ui()
         self._apply_settings()
@@ -358,10 +380,12 @@ class AutoImportApp(tk.Tk):
         tab_db = ttk.Frame(self.notebook)
         tab_dl = ttk.Frame(self.notebook)
         tab_sj = ttk.Frame(self.notebook)
+        tab_ss = ttk.Frame(self.notebook)
         self.notebook.add(tab_auto, text="  Otomasi  ")
         self.notebook.add(tab_db, text="  Database COA & Keterangan  ")
         self.notebook.add(tab_dl, text="  Download Draft IA  ")
         self.notebook.add(tab_sj, text="  Download SJ GIS  ")
+        self.notebook.add(tab_ss, text="  Screen Shot Power BI  ")
 
         # ================= TAB OTOMASI =================
         self.scroller = ScrollableBody(tab_auto)
@@ -729,6 +753,166 @@ class AutoImportApp(tk.Tk):
         self._sj_detect_script()
         self._sj_check_chrome()
         self._load_sj_settings()
+
+        # ================= TAB SCREEN SHOT POWER BI (v4.14) =================
+        # Menjalankan app.py (folder '4. Screen Shot Power BI') sebagai
+        # subprocess `app.py --cli`. Stdout diparse di _ss_worker:
+        #   PROGRESS: <cur>/<total> <label>   -> progressbar
+        #   DONE: success=<N> failed=<N>      -> status label
+        #   sisanya                           -> log widget
+        ssview = ttk.Frame(tab_ss, style="TFrame")
+        ssview.pack(fill="both", expand=True, padx=18, pady=16)
+        ssview.columnconfigure(0, weight=1)
+        ssview.columnconfigure(1, weight=1)
+        ssview.rowconfigure(1, weight=1)
+
+        # ---- Card 1: Konfigurasi ----
+        ss_cfg_card = self._card(ssview, "1. Konfigurasi")
+        ss_cfg_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 8))
+        ss_cfg_card.columnconfigure(1, weight=1)
+
+        # Power BI URL
+        tk.Label(ss_cfg_card, text="Power BI URL", bg=C_CARD, fg="#64748b",
+                 font=F_BODY).grid(row=1, column=0, sticky="w", padx=(14, 8), pady=(6, 4))
+        self.ss_url_var = tk.StringVar()
+        ttk.Entry(ss_cfg_card, textvariable=self.ss_url_var).grid(
+            row=1, column=1, columnspan=2, sticky="ew", padx=(0, 14), pady=(6, 4))
+
+        # Pages
+        tk.Label(ss_cfg_card, text="Pages", bg=C_CARD, fg="#64748b",
+                 font=F_BODY).grid(row=2, column=0, sticky="w", padx=(14, 8), pady=(0, 4))
+        self.ss_pages_var = tk.StringVar()
+        ttk.Entry(ss_cfg_card, textvariable=self.ss_pages_var, width=22).grid(
+            row=2, column=1, sticky="w", padx=(0, 8), pady=(0, 4))
+        tk.Label(ss_cfg_card, text="Contoh: 19,20,21,22 atau 19-22",
+                 bg=C_CARD, fg="#94a3b8", font=F_HINT, anchor="w").grid(
+            row=3, column=1, sticky="w", padx=(0, 8), pady=(0, 4))
+
+        # Output Folder
+        tk.Label(ss_cfg_card, text="Output Folder", bg=C_CARD, fg="#64748b",
+                 font=F_BODY).grid(row=4, column=0, sticky="w", padx=(14, 8), pady=(0, 4))
+        self.ss_output_var = tk.StringVar()
+        ttk.Entry(ss_cfg_card, textvariable=self.ss_output_var).grid(
+            row=4, column=1, sticky="ew", padx=(0, 4), pady=(0, 4))
+        ttk.Button(ss_cfg_card, text="Ubah...",
+                   command=self._ss_change_output).grid(
+            row=4, column=2, padx=(0, 14), pady=(0, 4))
+
+        # Format
+        tk.Label(ss_cfg_card, text="Format", bg=C_CARD, fg="#64748b",
+                 font=F_BODY).grid(row=5, column=0, sticky="w", padx=(14, 8), pady=(0, 12))
+        self.ss_format_var = tk.StringVar(value="PNG")
+        self.ss_format_combo = ttk.Combobox(
+            ss_cfg_card, textvariable=self.ss_format_var,
+            values=("PNG", "PDF"), state="readonly", width=8)
+        self.ss_format_combo.grid(row=5, column=1, sticky="w", padx=(0, 8), pady=(0, 12))
+
+        # ---- Card 2: Resto & Opsi ----
+        ss_ctl_card = self._card(ssview, "2. Resto & Opsi")
+        ss_ctl_card.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=(0, 8))
+        ss_ctl_card.columnconfigure(0, weight=1)
+
+        tk.Label(ss_ctl_card, text="Daftar Resto (satu per baris):",
+                 bg=C_CARD, fg="#475569", font=F_BODY, anchor="w"
+                 ).grid(row=1, column=0, sticky="ew", padx=14, pady=(6, 2))
+        ss_txt_wrap = tk.Frame(ss_ctl_card, bg=C_TERM_BG)
+        ss_txt_wrap.grid(row=2, column=0, sticky="nsew", padx=14, pady=(0, 6))
+        ss_txt_wrap.columnconfigure(0, weight=1)
+        ss_txt_wrap.rowconfigure(0, weight=1)
+        ss_ctl_card.rowconfigure(2, weight=1)
+        self.ss_restos_text = tk.Text(ss_txt_wrap, bg=C_TERM_BG, fg="#dbeafe",
+                                      insertbackground="white", relief="flat",
+                                      font=F_LOG, wrap="word", height=8, undo=True)
+        self.ss_restos_text.grid(row=0, column=0, sticky="nsew")
+        ss_txt_sb = ttk.Scrollbar(ss_txt_wrap, orient="vertical",
+                                  command=self.ss_restos_text.yview)
+        ss_txt_sb.grid(row=0, column=1, sticky="ns")
+        self.ss_restos_text.configure(yscrollcommand=ss_txt_sb.set)
+        self.ss_restos_text.bind("<MouseWheel>", self._ss_restos_wheel)
+        self.ss_restos_text.bind("<Button-4>", self._ss_restos_wheel)
+        self.ss_restos_text.bind("<Button-5>", self._ss_restos_wheel)
+
+        # V16 Optimizations frame
+        ss_opt = ttk.LabelFrame(ss_ctl_card, text="V16 Optimizations", padding=8)
+        ss_opt.grid(row=3, column=0, sticky="ew", padx=14, pady=(0, 6))
+        self.ss_opt_sequential = tk.BooleanVar(value=True)
+        self.ss_opt_smart = tk.BooleanVar(value=False)
+        self.ss_opt_reuse = tk.BooleanVar(value=True)
+        self.ss_opt_merge = tk.BooleanVar(value=True)
+        self.ss_opt_light = tk.BooleanVar(value=True)
+        self.ss_opt_force = tk.BooleanVar(value=True)
+        ss_row1 = tk.Frame(ss_opt, bg=C_CARD); ss_row1.pack(fill="x", pady=(0, 4))
+        ttk.Checkbutton(ss_row1, text="Sequential page nav",
+                       variable=self.ss_opt_sequential).pack(side="left", padx=(0, 12))
+        ttk.Checkbutton(ss_row1, text="Reuse stable screenshot",
+                       variable=self.ss_opt_reuse).pack(side="left", padx=(0, 12))
+        ttk.Checkbutton(ss_row1, text="Merge final stability check",
+                       variable=self.ss_opt_merge).pack(side="left")
+        ss_row2 = tk.Frame(ss_opt, bg=C_CARD); ss_row2.pack(fill="x")
+        ttk.Checkbutton(ss_row2, text="Light recovery (clear, no reload)",
+                       variable=self.ss_opt_light).pack(side="left", padx=(0, 12))
+        ttk.Checkbutton(ss_row2, text="Force-click Next Page fallback",
+                       variable=self.ss_opt_force).pack(side="left", padx=(0, 12))
+        ttk.Checkbutton(ss_row2, text="Smart resto transition (experimental)",
+                       variable=self.ss_opt_smart).pack(side="left")
+
+        # Run/Stop buttons
+        ss_run_btns = tk.Frame(ss_ctl_card, bg=C_CARD)
+        ss_run_btns.grid(row=4, column=0, sticky="ew", padx=14, pady=(0, 6))
+        self.ss_start_btn = ttk.Button(ss_run_btns, text="\u25b6  Mulai Screenshot",
+                                       style="Success.TButton",
+                                       command=self._start_ss)
+        self.ss_start_btn.pack(side="left", padx=(0, 8))
+        self.ss_stop_btn = ttk.Button(ss_run_btns, text="\u25a0  Hentikan",
+                                     style="Danger.TButton", state="disabled",
+                                     command=self._stop_ss)
+        self.ss_stop_btn.pack(side="left", padx=(0, 8))
+        ttk.Button(ss_run_btns, text="\U0001f4c1  Buka Output",
+                   command=self._ss_open_output).pack(side="left")
+
+        # Progress bar + counter
+        ss_prog = tk.Frame(ss_ctl_card, bg=C_CARD)
+        ss_prog.grid(row=5, column=0, sticky="ew", padx=14, pady=(0, 4))
+        ss_prog.columnconfigure(0, weight=1)
+        self.ss_progress = ttk.Progressbar(ss_prog, mode="determinate")
+        self.ss_progress.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        self.ss_counter_lbl = tk.Label(ss_prog, text="0 / 0", bg=C_CARD,
+                                       fg="#475569", font=F_BODY)
+        self.ss_counter_lbl.grid(row=0, column=1)
+
+        # Status label
+        self.ss_status_lbl = tk.Label(ss_ctl_card, text="Siap. (Playwright + Chromium wajib terpasang)",
+                                      justify="left", anchor="w", bg=C_INFO_BG,
+                                      fg="#334155", padx=12, pady=8, font=F_BODY)
+        self.ss_status_lbl.grid(row=6, column=0, sticky="ew", padx=14, pady=(0, 10))
+
+        # ---- Card 3: Log Screenshot ----
+        ss_log_card = self._card(ssview, "3. Log Screenshot")
+        ss_log_card.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        ss_log_card.columnconfigure(0, weight=1)
+        ss_log_card.rowconfigure(1, weight=1)
+        ss_log_wrap = tk.Frame(ss_log_card, bg=C_TERM_BG)
+        ss_log_wrap.grid(row=1, column=0, sticky="nsew", padx=14, pady=(4, 8))
+        ss_log_wrap.columnconfigure(0, weight=1)
+        ss_log_wrap.rowconfigure(0, weight=1)
+        self.ss_text = tk.Text(ss_log_wrap, bg=C_TERM_BG, fg="#dbeafe",
+                               insertbackground="white", relief="flat",
+                               font=F_LOG, wrap="word", state="disabled")
+        self.ss_text.grid(row=0, column=0, sticky="nsew")
+        ss_log_sb = ttk.Scrollbar(ss_log_wrap, orient="vertical",
+                                  command=self.ss_text.yview)
+        ss_log_sb.grid(row=0, column=1, sticky="ns")
+        self.ss_text.configure(yscrollcommand=ss_log_sb.set)
+        self.ss_text.bind("<MouseWheel>", self._ss_text_wheel)
+        self.ss_text.bind("<Button-4>", self._ss_text_wheel)
+        self.ss_text.bind("<Button-5>", self._ss_text_wheel)
+        ttk.Button(ss_log_card, text="Bersihkan",
+                   command=self._ss_clear).grid(row=2, column=0, sticky="e",
+                                                padx=14, pady=(0, 10))
+
+        # ---- Inisialisasi indikator SS (auto-detect app.py + load config.json) ----
+        self._ss_detect_script()
+        self._ss_load_config()
 
     # ================= HELPERS =================
     def _db_tree_wheel(self, e):
@@ -1187,6 +1371,257 @@ class AutoImportApp(tk.Tk):
             self.sj_kodes_text.insert("1.0", kodes)
             self._sj_count_kodes()
 
+    # ================= SCREEN SHOT POWER BI (v4.14) =================
+    def _ss_detect_script(self):
+        """Auto-detect app.py path: ../4. Screen Shot Power BI/ relative to this file.
+
+        Returns True if app.py is found, False otherwise. Sets self.ss_script_path.
+        """
+        base = os.path.dirname(os.path.abspath(__file__))
+        candidates = [
+            os.path.join(base, "..", "4. Screen Shot Power BI", "app.py"),
+            os.path.join(base, "4. Screen Shot Power BI", "app.py"),
+            os.path.join(base, "app.py"),
+        ]
+        for c in candidates:
+            c = os.path.normpath(c)
+            if os.path.isfile(c):
+                self.ss_script_path = c
+                return True
+        self.ss_script_path = None
+        return False
+
+    def _ss_load_config(self):
+        """Load config.json from app.py folder, populate form fields.
+
+        Called at end of _build_ui() after _ss_detect_script(). If script not
+        detected, leaves form fields at their defaults (empty / 'PNG').
+        """
+        if not self.ss_script_path:
+            # leave defaults; user can fill manually
+            self.ss_format_var.set("PNG")
+            self.ss_output_var.set("")
+            return
+        cfg_path = os.path.join(os.path.dirname(self.ss_script_path), "config.json")
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception as e:
+            self._ss_log_line(f"[WARNING] Gagal load config.json: {e}")
+            return
+        self.ss_url_var.set(cfg.get("powerbi_url", ""))
+        self.ss_pages_var.set(cfg.get("page", "19,20,21,22"))
+        # output_dir default = folder 'output' di sebelah app.py
+        default_out = os.path.join(os.path.dirname(self.ss_script_path), "output")
+        self.ss_output_var.set(cfg.get("output_dir", default_out) or default_out)
+        self.ss_format_var.set(str(cfg.get("output_format", "PNG")).upper())
+        self.ss_restos_text.delete("1.0", "end")
+        self.ss_restos_text.insert("1.0", cfg.get("restos", "4217\nDPKLIM\nMTR\nBSD"))
+        self.ss_opt_sequential.set(bool(cfg.get("opt_sequential_page_nav", True)))
+        self.ss_opt_smart.set(bool(cfg.get("opt_smart_resto_transition", False)))
+        self.ss_opt_reuse.set(bool(cfg.get("opt_reuse_stable_screenshot", True)))
+        self.ss_opt_merge.set(bool(cfg.get("opt_merge_final_stability", True)))
+        self.ss_opt_light.set(bool(cfg.get("opt_light_recovery", True)))
+        self.ss_opt_force.set(bool(cfg.get("opt_force_click_next_page", True)))
+
+    def _ss_save_config(self):
+        """Save form values to config.json (in app.py folder) before running.
+
+        Merges with existing keys (preserves viewport / timing / etc).
+        """
+        if not self.ss_script_path:
+            return
+        cfg_path = os.path.join(os.path.dirname(self.ss_script_path), "config.json")
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            cfg = {}
+        cfg["powerbi_url"] = self.ss_url_var.get().strip()
+        cfg["page"] = self.ss_pages_var.get().strip()
+        cfg["output_dir"] = self.ss_output_var.get().strip()
+        cfg["output_format"] = self.ss_format_var.get().strip().upper()
+        cfg["restos"] = self.ss_restos_text.get("1.0", "end").strip()
+        cfg["opt_sequential_page_nav"] = bool(self.ss_opt_sequential.get())
+        cfg["opt_smart_resto_transition"] = bool(self.ss_opt_smart.get())
+        cfg["opt_reuse_stable_screenshot"] = bool(self.ss_opt_reuse.get())
+        cfg["opt_merge_final_stability"] = bool(self.ss_opt_merge.get())
+        cfg["opt_light_recovery"] = bool(self.ss_opt_light.get())
+        cfg["opt_force_click_next_page"] = bool(self.ss_opt_force.get())
+        try:
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            self._ss_log_line(f"[WARNING] Gagal simpan config.json: {e}")
+
+    def _ss_change_output(self):
+        """Browse for output folder."""
+        initial = self.ss_output_var.get().strip()
+        if not initial or not os.path.isdir(initial):
+            initial = (os.path.dirname(self.ss_script_path)
+                       if self.ss_script_path else os.getcwd())
+        folder = filedialog.askdirectory(
+            title="Pilih folder output", initialdir=initial)
+        if folder:
+            self.ss_output_var.set(folder)
+
+    def _ss_open_output(self):
+        """Open output folder in OS file explorer."""
+        folder = self.ss_output_var.get().strip()
+        if not folder or not os.path.isdir(folder):
+            messagebox.showwarning(
+                APP_TITLE,
+                "Folder output tidak ada.\nMulai screenshot dulu, folder dibuat otomatis.",
+                parent=self)
+            return
+        try:
+            if sys.platform == "win32":
+                try:
+                    os.startfile(folder)
+                except Exception:
+                    subprocess.Popen(["explorer", folder])
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", folder])
+            else:
+                subprocess.Popen(["xdg-open", folder])
+        except Exception:
+            pass
+
+    def _ss_clear(self):
+        self.ss_text.configure(state="normal")
+        self.ss_text.delete("1.0", "end")
+        self.ss_text.configure(state="disabled")
+
+    def _ss_log_line(self, line):
+        """Append a line to the SS log Text widget (thread-safe via ui_queue)."""
+        self.ui_queue.put(("ss_log", line))
+
+    def _ss_restos_wheel(self, e):
+        steps = _wheel_steps(e)
+        if steps:
+            try:
+                self.ss_restos_text.yview_scroll(steps, "units")
+            except Exception:
+                pass
+
+    def _ss_text_wheel(self, e):
+        steps = _wheel_steps(e)
+        if steps:
+            try:
+                self.ss_text.yview_scroll(steps, "units")
+            except Exception:
+                pass
+
+    def _start_ss(self):
+        """Validate form + save config + launch `app.py --cli` subprocess."""
+        if self.ss_running:
+            return
+        if not self._ss_detect_script():
+            messagebox.showwarning(
+                APP_TITLE,
+                "app.py tidak ditemukan di folder '4. Screen Shot Power BI'.\n"
+                "Pastikan folder berdampingan dengan '2. Import IA'.",
+                parent=self)
+            return
+        if not self.ss_url_var.get().strip():
+            messagebox.showwarning(APP_TITLE, "Power BI URL belum diisi.", parent=self)
+            return
+        if not self.ss_pages_var.get().strip():
+            messagebox.showwarning(
+                APP_TITLE, "Pages belum diisi (mis. 19,20,21,22).", parent=self)
+            return
+        restos = [r.strip() for r in self.ss_restos_text.get("1.0", "end").splitlines()
+                  if r.strip()]
+        if not restos:
+            messagebox.showwarning(APP_TITLE, "Daftar resto masih kosong.", parent=self)
+            return
+        # save config.json before launching (so subprocess reads latest values)
+        self._ss_save_config()
+        self.ss_running = True
+        self.ss_stop.clear()
+        self.ss_start_btn.configure(state="disabled")
+        self.ss_stop_btn.configure(state="normal")
+        self.ss_progress["value"] = 0
+        self.ss_progress["maximum"] = 1
+        self.ss_counter_lbl.configure(text="0 / 0")
+        self.ss_status_lbl.configure(
+            text=f"Berjalan — {len(restos)} resto × pages {self.ss_pages_var.get()}")
+        self._ss_log_line(
+            f"===== Mulai Screen Shot Power BI: pages={self.ss_pages_var.get()} "
+            f"| resto={len(restos)} =====")
+        threading.Thread(target=self._ss_worker, daemon=True).start()
+
+    def _stop_ss(self):
+        """Request stop: set threading.Event + terminate subprocess gracefully."""
+        if not self.ss_running:
+            return
+        self.ss_stop.set()
+        self.ss_stop_btn.configure(state="disabled")
+        self.ss_status_lbl.configure(text="Menghentikan...")
+        proc = self.ss_proc
+
+        def _graceful():
+            try:
+                if proc is not None and proc.poll() is None:
+                    proc.terminate()
+            except Exception:
+                pass
+        threading.Thread(target=_graceful, daemon=True).start()
+
+    def _ss_worker(self):
+        """Run app.py --cli as subprocess, read stdout, push to ui_queue.
+
+        Parses machine-readable markers emitted by run_cli() in app.py:
+          'PROGRESS: <cur>/<total> <label>' -> ('ss_progress', (cur, tot, label))
+          'DONE: success=<N> failed=<N>'    -> ('ss_done', (success, failed))
+          any other line                    -> ('ss_log', line)
+        """
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, self.ss_script_path, "--cli"],
+                cwd=os.path.dirname(self.ss_script_path),
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace", bufsize=1,
+                env=env,
+            )
+        except Exception as e:
+            self.ui_queue.put(("ss_log", f"[ERROR] Gagal menjalankan app.py: {e}"))
+            self.ui_queue.put(("ss_done", (0, 0)))
+            return
+        self.ss_proc = proc
+        for line in proc.stdout:
+            line = line.rstrip("\r\n")
+            if not line:
+                continue
+            self.ui_queue.put(("ss_log", line))
+            if line.startswith("PROGRESS:"):
+                m = re.search(r"PROGRESS:\s*(\d+)/(\d+)\s*(.*)", line)
+                if m:
+                    cur = int(m.group(1))
+                    tot = int(m.group(2))
+                    label = m.group(3)
+                    self.ui_queue.put(("ss_progress", (cur, tot, label)))
+            elif line.startswith("DONE:"):
+                m = re.search(r"DONE:\s*success=(\d+)\s*failed=(\d+)", line)
+                if m:
+                    success = int(m.group(1))
+                    failed = int(m.group(2))
+                    self.ui_queue.put(("ss_done", (success, failed)))
+            # Check stop between lines (best-effort; subprocess terminate
+            # is the real stop mechanism in _stop_ss).
+            if self.ss_stop.is_set():
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+                break
+        proc.wait()
+        # Always emit a final ss_done (None, None) if no DONE marker was seen,
+        # so the UI re-enables the Start button.
+        self.ui_queue.put(("ss_done", (None, None)))
+
     def _parse_branches(self):
         raw = self.dl_branches_var.get()
         return [x.strip() for x in re.split(r"[,;]", raw) if x.strip()]
@@ -1517,6 +1952,33 @@ class AutoImportApp(tk.Tk):
                     self.sj_text.insert("end", "===== Selesai =====\n")
                     self.sj_text.see("end")
                     self.sj_text.configure(state="disabled")
+                # ---- Screen Shot Power BI (v4.14) ----
+                elif a == "ss_log":
+                    msg = item[1]
+                    self.ss_text.configure(state="normal")
+                    self.ss_text.insert("end", msg + "\n")
+                    self.ss_text.see("end")
+                    self.ss_text.configure(state="disabled")
+                elif a == "ss_progress":
+                    cur, tot, label = item[1]
+                    self.ss_progress["maximum"] = max(tot, 1)
+                    self.ss_progress["value"] = cur
+                    self.ss_counter_lbl.configure(text=f"{cur} / {tot}")
+                    self.ss_status_lbl.configure(text=f"{cur}/{tot} — {label}")
+                elif a == "ss_done":
+                    success, failed = item[1]
+                    self.ss_running = False
+                    self.ss_start_btn.configure(state="normal")
+                    self.ss_stop_btn.configure(state="disabled")
+                    if success is not None:
+                        self.ss_status_lbl.configure(
+                            text=f"Selesai — {success} berhasil, {failed} gagal")
+                        self._ss_log_line(
+                            f"===== Selesai: {success} berhasil, {failed} gagal =====")
+                    else:
+                        # No DONE marker seen (subprocess terminated early or
+                        # crashed without emitting DONE). Show 'Dihentikan'.
+                        self.ss_status_lbl.configure(text="Dihentikan")
         except queue.Empty:
             pass
         self.after(100, self._drain_queue)
@@ -1537,6 +1999,7 @@ class AutoImportApp(tk.Tk):
         self.stop_requested.set()
         self.dl_stop.set()
         self.sj_stop.set()
+        self.ss_stop.set()
         try:
             if self.dl_proc is not None and self.dl_proc.poll() is None:
                 self.dl_proc.terminate()
@@ -1545,6 +2008,11 @@ class AutoImportApp(tk.Tk):
         try:
             if self.sj_proc is not None and self.sj_proc.poll() is None:
                 self.sj_proc.terminate()
+        except Exception:
+            pass
+        try:
+            if self.ss_proc is not None and self.ss_proc.poll() is None:
+                self.ss_proc.terminate()
         except Exception:
             pass
         self.destroy()
@@ -1675,6 +2143,6 @@ class AutoImportApp(tk.Tk):
 
 
 if __name__ == "__main__":
-    print(f"=== {APP_TITLE} — ui_app.py v4.12 (pasangan accurate_bot.py v4.7) ===")
+    print(f"=== {APP_TITLE} — ui_app.py v4.14 (pasangan accurate_bot.py v4.7) ===")
     app = AutoImportApp()
     app.mainloop()

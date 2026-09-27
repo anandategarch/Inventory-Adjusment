@@ -1,0 +1,12 @@
+# Output directory (screenshots saved here)
+output/
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Local virtual environment (created by launch.bat)
+.venv/
+
+# Setup log
+setup.log
