@@ -1,6 +1,16 @@
 """
-ui_app.py — tampilan aplikasi Import IA (v4.18, pasangan accurate_bot.py v4.7).
+ui_app.py — tampilan aplikasi Import IA (v4.19, pasangan accurate_bot.py v4.7).
 Tab: Otomasi | Database COA & Keterangan | Download Draft IA | Download SJ GIS | Screen Shot Power BI.
+v4.19: FIX log Text widgets (sj_text, ss_text, dl_text) yang 0px/invisible.
+Root cause: grid rowconfigure(N, weight=1) TANPA minsize memungkinkan row
+di-shrink ke 0px bila parent layout tidak mengalokasikan ruang cukup. Lines
+tetap di-insert via _drain_queue tapi Text widget tinggi 0px -> invisible.
+Fix: tambah minsize=300 ke log CARD rowconfigure(1) + minsize=280 ke log WRAP
+rowconfigure(0) untuk ketiga tab (SJ GIS + SS + DL). Tambahan minsize=300 ke
+parent view rowconfigure(1) (sjview/ssview/dlview) sebagai defensive layer.
+minsize = HARD floor — grid tidak bisa shrink row di bawah 300px. Text widget
+sticky=nsew akan mengisi 300px -> visible + scrollable. Tidak mengubah Text
+widget creation atau _drain_queue.
 v4.18: REVERT SS tab Card 3 (Log Screenshot) ke grid layout. v4.17 pakai
 pack_propagate(False) + pack() + height=15 untuk ss_text, tapi ini bikin
 ss_log_wrap Frame stuck di 0px (pack_propagate mencegah child men-size parent,
@@ -570,7 +580,7 @@ class AutoImportApp(tk.Tk):
         dlview.pack(fill="both", expand=True, padx=18, pady=16)
         dlview.columnconfigure(0, weight=1)
         dlview.columnconfigure(1, weight=1)
-        dlview.rowconfigure(1, weight=1)
+        dlview.rowconfigure(1, weight=1, minsize=300)
 
         src_card = self._card(dlview, "1. Sumber & Lokasi")
         src_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 8))
@@ -626,11 +636,11 @@ class AutoImportApp(tk.Tk):
         log_card = self._card(dlview, "3. Log Download")
         log_card.grid(row=1, column=0, columnspan=2, sticky="nsew")
         log_card.columnconfigure(0, weight=1)
-        log_card.rowconfigure(1, weight=1)
+        log_card.rowconfigure(1, weight=1, minsize=300)
         dl_log_wrap = tk.Frame(log_card, bg=C_TERM_BG)
         dl_log_wrap.grid(row=1, column=0, sticky="nsew", padx=14, pady=(4, 12))
         dl_log_wrap.columnconfigure(0, weight=1)
-        dl_log_wrap.rowconfigure(0, weight=1)
+        dl_log_wrap.rowconfigure(0, weight=1, minsize=280)
         self.dl_text = tk.Text(dl_log_wrap, bg=C_TERM_BG, fg="#dbeafe", insertbackground="white",
                                relief="flat", font=F_LOG, wrap="word", state="disabled")
         self.dl_text.grid(row=0, column=0, sticky="nsew")
@@ -647,7 +657,7 @@ class AutoImportApp(tk.Tk):
         sjview.pack(fill="both", expand=True, padx=18, pady=16)
         sjview.columnconfigure(0, weight=1)
         sjview.columnconfigure(1, weight=1)
-        sjview.rowconfigure(1, weight=1)
+        sjview.rowconfigure(1, weight=1, minsize=300)
 
         # ---- Card 1: Input Kode SJ ----
         sj_in_card = self._card(sjview, "1. Input Kode SJ")
@@ -728,11 +738,11 @@ class AutoImportApp(tk.Tk):
         sj_log_card = self._card(sjview, "3. Log Download SJ")
         sj_log_card.grid(row=1, column=0, columnspan=2, sticky="nsew")
         sj_log_card.columnconfigure(0, weight=1)
-        sj_log_card.rowconfigure(1, weight=1)
+        sj_log_card.rowconfigure(1, weight=1, minsize=300)
         sj_log_wrap = tk.Frame(sj_log_card, bg=C_TERM_BG)
         sj_log_wrap.grid(row=1, column=0, sticky="nsew", padx=14, pady=(4, 8))
         sj_log_wrap.columnconfigure(0, weight=1)
-        sj_log_wrap.rowconfigure(0, weight=1)
+        sj_log_wrap.rowconfigure(0, weight=1, minsize=280)
         self.sj_text = tk.Text(sj_log_wrap, bg=C_TERM_BG, fg="#dbeafe", insertbackground="white",
                                relief="flat", font=F_LOG, wrap="word", state="disabled")
         self.sj_text.grid(row=0, column=0, sticky="nsew")
@@ -797,7 +807,7 @@ class AutoImportApp(tk.Tk):
         ssview.pack(fill="both", expand=True, padx=18, pady=16)
         ssview.columnconfigure(0, weight=1)
         ssview.columnconfigure(1, weight=1)
-        ssview.rowconfigure(1, weight=1)
+        ssview.rowconfigure(1, weight=1, minsize=300)
 
         # ---- Card 1: Konfigurasi ----
         ss_cfg_card = self._card(ssview, "1. Konfigurasi")
@@ -929,7 +939,7 @@ class AutoImportApp(tk.Tk):
         ss_log_card.grid(row=1, column=0, columnspan=2, sticky="nsew",
                          pady=(8, 0))
         ss_log_card.columnconfigure(0, weight=1)
-        ss_log_card.rowconfigure(1, weight=1)
+        ss_log_card.rowconfigure(1, weight=1, minsize=300)
 
         # Log buttons row (Test Log + Bersihkan + Buka Output)
         ss_log_btns = tk.Frame(ss_log_card, bg=C_CARD)
@@ -945,7 +955,7 @@ class AutoImportApp(tk.Tk):
         ss_log_wrap = tk.Frame(ss_log_card, bg=C_TERM_BG)
         ss_log_wrap.grid(row=1, column=0, sticky="nsew", padx=14, pady=(4, 10))
         ss_log_wrap.columnconfigure(0, weight=1)
-        ss_log_wrap.rowconfigure(0, weight=1)
+        ss_log_wrap.rowconfigure(0, weight=1, minsize=280)
         self.ss_text = tk.Text(ss_log_wrap, bg=C_TERM_BG, fg="#dbeafe",
                                insertbackground="white", relief="flat",
                                font=F_LOG, wrap="word", state="disabled")
@@ -2217,6 +2227,6 @@ class AutoImportApp(tk.Tk):
 
 
 if __name__ == "__main__":
-    print(f"=== {APP_TITLE} — ui_app.py v4.18 (pasangan accurate_bot.py v4.7) ===")
+    print(f"=== {APP_TITLE} — ui_app.py v4.19 (pasangan accurate_bot.py v4.7) ===")
     app = AutoImportApp()
     app.mainloop()
