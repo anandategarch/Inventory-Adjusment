@@ -1,19 +1,19 @@
 @echo off
 setlocal
 chcp 65001 >nul
-title Inventory Adjusment Tools — SETUP (One-Time)
+title Inventory Adjusment Tools - SETUP (One-Time)
 color 0B
 cls
 echo ============================================================
-echo   SETUP — Install Dependencies (One-Time)
+echo   SETUP - Install Dependencies (One-Time)
 echo ============================================================
 echo.
 echo  Menginstall dependencies untuk semua tool:
-echo    - selenium        (Tool 1, 2, 3 — Accurate Online automation)
-echo    - openpyxl, xlrd  (Tool 2 — Excel handling)
-echo    - playwright      (Tool 4 — Power BI screenshot)
-echo    - Pillow          (Tool 4 — image processing)
-echo    - Chromium browser (Tool 4 — Playwright browser)
+echo    - selenium        (Tool 1, 2, 3 - Accurate Online automation)
+echo    - openpyxl, xlrd  (Tool 2 - Excel handling)
+echo    - playwright      (Tool 4 - Power BI screenshot)
+echo    - Pillow          (Tool 4 - image processing)
+echo    - Chromium browser (Tool 4 - Playwright browser)
 echo.
 echo  Tekan ENTER untuk mulai install...
 pause >nul

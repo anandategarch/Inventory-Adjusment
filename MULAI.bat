@@ -1,11 +1,11 @@
 @echo off
 setlocal
 chcp 65001 >nul
-title Inventory Adjusment Tools — Unified UI
+title Inventory Adjusment Tools - Unified UI
 color 0A
 cls
 echo ============================================================
-echo   INVENTORY ADJUSEMENT TOOLS — UNIFIED UI
+echo   INVENTORY ADJUSEMENT TOOLS - UNIFIED UI
 echo ============================================================
 echo.
 echo  Membuka aplikasi dengan 5 tab:

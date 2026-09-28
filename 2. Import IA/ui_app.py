@@ -1,6 +1,22 @@
 """
-ui_app.py — tampilan aplikasi Import IA (v4.16, pasangan accurate_bot.py v4.7).
+ui_app.py — tampilan aplikasi Import IA (v4.17, pasangan accurate_bot.py v4.7).
 Tab: Otomasi | Database COA & Keterangan | Download Draft IA | Download SJ GIS | Screen Shot Power BI.
+v4.17: redesign Card 3 (Log Screenshot) di tab Screen Shot — Text widget
+sebelumnya pakai grid tanpa explicit height, jadi pada sebagian DPI / theme
+combo ukurannya jadi mendekati 0px (lines tetap diinsert via _drain_queue,
+tapi tak terlihat). Sekarang: pack-based layout + pack_propagate(False) +
+height=15 explicit + scrollbar pack fill-y. Tambahan tombol "Test Log" di
+baris tombol Card 3 (sebelah Bersihkan + Buka Output) — push 8 dummy lines
+via jalur yang sama (_ss_log_line -> ui_queue -> _drain_queue) buat
+verifikasi widget. Kalau Test Log keliatan = widget OK, masalah ada di
+_ss_worker/subprocess; kalau Test Log kosong = widget/drain_queue bermasalah.
+"Buka Output" dipindah dari ss_ctl_card ke baris tombol Card 3 (sebelah
+Test Log + Bersihkan). Sj_text (tab Download SJ GIS) TIDAK diubah — layout
+mirip tapi sudah ada wheel scroll dan user tidak report issue, jangan
+break working code. .bat encoding fix: em dash (U+2014) di MULAI.bat +
+SETUP.bat diganti hyphen-minus biasa (CMD gak parse Unicode em dash ->
+"'—' is not recognized" errors). UI Python tetap Unicode (Tkinter handle
+em dash + emoji OK).
 v4.14: tab kelima "Screen Shot Power BI" — menjalankan app.py (folder
 '4. Screen Shot Power BI') sebagai subprocess `app.py --cli`. 3 cards:
 (1) Konfigurasi: Power BI URL + Pages + Output folder + Format (PNG/PDF);
@@ -861,7 +877,8 @@ class AutoImportApp(tk.Tk):
         ttk.Checkbutton(ss_row2, text="Force-click Next Page fallback",
                        variable=self.ss_opt_force).pack(side="left")
 
-        # Run/Stop buttons
+        # Run/Stop buttons (v4.17: 'Buka Output' moved to Card 3 log button row
+        # next to Test Log + Bersihkan, so this row only needs Mulai + Hentikan)
         ss_run_btns = tk.Frame(ss_ctl_card, bg=C_CARD)
         ss_run_btns.grid(row=4, column=0, sticky="ew", padx=14, pady=(0, 6))
         self.ss_start_btn = ttk.Button(ss_run_btns, text="\u25b6  Mulai Screenshot",
@@ -872,8 +889,6 @@ class AutoImportApp(tk.Tk):
                                      style="Danger.TButton", state="disabled",
                                      command=self._stop_ss)
         self.ss_stop_btn.pack(side="left", padx=(0, 8))
-        ttk.Button(ss_run_btns, text="\U0001f4c1  Buka Output",
-                   command=self._ss_open_output).pack(side="left")
 
         # Progress bar + counter
         ss_prog = tk.Frame(ss_ctl_card, bg=C_CARD)
@@ -891,29 +906,52 @@ class AutoImportApp(tk.Tk):
                                       fg="#334155", padx=12, pady=8, font=F_BODY)
         self.ss_status_lbl.grid(row=6, column=0, sticky="ew", padx=14, pady=(0, 10))
 
-        # ---- Card 3: Log Screenshot ----
+        # ---- Card 3: Log Screenshot (redesigned v4.17) --------------------
+        # Why redesign: prior layout used grid + no explicit Text height, so
+        # on some DPI / ttk-theme combos the Text widget ended up near-zero
+        # height. _drain_queue still inserted lines into it, but they were
+        # invisible (the widget was a 0px sliver). Switching to pack-based
+        # layout with pack_propagate(False) + explicit height=15 forces a
+        # tall, visible, scrollable Text that reliably expands to fill the
+        # card. Also adds a 'Test Log' button as a diagnostic: clicking it
+        # pushes 8 dummy lines through the same path as real subprocess
+        # output. If Test Log lines appear -> widget + drain_queue OK and the
+        # issue is in _ss_worker/subprocess. If Test Log shows nothing ->
+        # widget/drain_queue is broken.
         ss_log_card = self._card(ssview, "3. Log Screenshot")
-        ss_log_card.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        ss_log_card.grid(row=1, column=0, columnspan=2, sticky="nsew",
+                         pady=(8, 0))
         ss_log_card.columnconfigure(0, weight=1)
         ss_log_card.rowconfigure(1, weight=1)
+
+        # Log buttons row (Test Log + Bersihkan + Buka Output)
+        ss_log_btns = tk.Frame(ss_log_card, bg=C_CARD)
+        ss_log_btns.grid(row=0, column=0, sticky="ew", padx=14, pady=(10, 4))
+        ttk.Button(ss_log_btns, text="Test Log",
+                   command=self._ss_test_log).pack(side="left", padx=(0, 8))
+        ttk.Button(ss_log_btns, text="Bersihkan",
+                   command=self._ss_clear).pack(side="left", padx=(0, 8))
+        ttk.Button(ss_log_btns, text="Buka Output",
+                   command=self._ss_open_output).pack(side="left")
+
+        # Log Text + Scrollbar (pack-based, more reliable fill-expand than grid)
         ss_log_wrap = tk.Frame(ss_log_card, bg=C_TERM_BG)
-        ss_log_wrap.grid(row=1, column=0, sticky="nsew", padx=14, pady=(4, 8))
-        ss_log_wrap.columnconfigure(0, weight=1)
-        ss_log_wrap.rowconfigure(0, weight=1)
+        ss_log_wrap.grid(row=1, column=0, sticky="nsew", padx=14, pady=(4, 10))
+        ss_log_wrap.pack_propagate(False)  # prevent Text from shrinking the wrap
         self.ss_text = tk.Text(ss_log_wrap, bg=C_TERM_BG, fg="#dbeafe",
                                insertbackground="white", relief="flat",
-                               font=F_LOG, wrap="word", state="disabled")
-        self.ss_text.grid(row=0, column=0, sticky="nsew")
+                               font=F_LOG, wrap="word", state="disabled",
+                               height=15)  # explicit tall height
+        self.ss_text.pack(side="left", fill="both", expand=True)
         ss_log_sb = ttk.Scrollbar(ss_log_wrap, orient="vertical",
                                   command=self.ss_text.yview)
-        ss_log_sb.grid(row=0, column=1, sticky="ns")
+        ss_log_sb.pack(side="right", fill="y")
         self.ss_text.configure(yscrollcommand=ss_log_sb.set)
+
+        # Wheel scroll (Linux Button-4/5 = up/down; Windows/Mac = MouseWheel)
         self.ss_text.bind("<MouseWheel>", self._ss_text_wheel)
         self.ss_text.bind("<Button-4>", self._ss_text_wheel)
         self.ss_text.bind("<Button-5>", self._ss_text_wheel)
-        ttk.Button(ss_log_card, text="Bersihkan",
-                   command=self._ss_clear).grid(row=2, column=0, sticky="e",
-                                                padx=14, pady=(0, 10))
 
         # ---- Inisialisasi indikator SS (auto-detect app.py + load config.json) ----
         self._ss_detect_script()
@@ -1498,6 +1536,26 @@ class AutoImportApp(tk.Tk):
     def _ss_log_line(self, line):
         """Append a line to the SS log Text widget (thread-safe via ui_queue)."""
         self.ui_queue.put(("ss_log", line))
+
+    def _ss_test_log(self):
+        """Test button: push 8 dummy lines to verify the SS log widget works.
+
+        Diagnostic aid (v4.17): if clicking 'Test Log' makes lines appear in
+        the log area, then ss_text widget + _drain_queue are working -- any
+        missing output during a real run is in the subprocess (app.py --cli)
+        or _ss_worker. If clicking 'Test Log' shows NOTHING, the problem is
+        in the widget itself or _drain_queue. Uses the same _ss_log_line ->
+        ui_queue -> _drain_queue path as real subprocess output, so it
+        exercises the exact same plumbing.
+        """
+        self._ss_log_line("===== TEST LOG: verifikasi widget log =====")
+        for i in range(1, 6):
+            self._ss_log_line(
+                f"[TEST {i}/5] Log widget test line - jika ini keliatan, log jalan.")
+        self._ss_log_line(
+            "[TEST] Jika 6 baris di atas keliatan, masalahnya di subprocess (app.py --cli).")
+        self._ss_log_line(
+            "[TEST] Kalau nggak keliatan, masalahnya di ss_text widget atau _drain_queue.")
 
     def _ss_restos_wheel(self, e):
         steps = _wheel_steps(e)
@@ -2152,6 +2210,6 @@ class AutoImportApp(tk.Tk):
 
 
 if __name__ == "__main__":
-    print(f"=== {APP_TITLE} — ui_app.py v4.16 (pasangan accurate_bot.py v4.7) ===")
+    print(f"=== {APP_TITLE} — ui_app.py v4.17 (pasangan accurate_bot.py v4.7) ===")
     app = AutoImportApp()
     app.mainloop()
