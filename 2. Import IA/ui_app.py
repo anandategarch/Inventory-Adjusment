@@ -1,5 +1,5 @@
 """
-ui_app.py — tampilan aplikasi Import IA (v4.14, pasangan accurate_bot.py v4.7).
+ui_app.py — tampilan aplikasi Import IA (v4.15, pasangan accurate_bot.py v4.7).
 Tab: Otomasi | Database COA & Keterangan | Download Draft IA | Download SJ GIS | Screen Shot Power BI.
 v4.14: tab kelima "Screen Shot Power BI" — menjalankan app.py (folder
 '4. Screen Shot Power BI') sebagai subprocess `app.py --cli`. 3 cards:
@@ -51,16 +51,24 @@ from tkinter import filedialog, messagebox, ttk
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 
-import accurate_bot as bot
-
-REQUIRED_BOT_VERSION = "4.7"
-if getattr(bot, "BOT_VERSION", None) != REQUIRED_BOT_VERSION:
-    raise RuntimeError(
-        "Versi file TIDAK SEPASANG.\n\n"
-        f"ui_app.py ini butuh accurate_bot.py versi {REQUIRED_BOT_VERSION},\n"
-        f"tapi terdeteksi versi: {getattr(bot, 'BOT_VERSION', 'LAMA')}.\n\n"
-        "Salin ulang kedua file dari paket yang sama, lalu hapus copy lama."
-    )
+# v4.15: merged main.py — ui_app.py sekarang entry point langsung.
+# import accurate_bot + version check di-wrap try/except (preserve nice error dialog
+# dari main.py lama). Kalau import/version gagal -> messagebox dialog (bukan traceback).
+try:
+    import accurate_bot as bot
+    REQUIRED_BOT_VERSION = "4.7"
+    if getattr(bot, "BOT_VERSION", None) != REQUIRED_BOT_VERSION:
+        raise RuntimeError(
+            "Versi file TIDAK SEPASANG.\n\n"
+            f"ui_app.py ini butuh accurate_bot.py versi {REQUIRED_BOT_VERSION},\n"
+            f"tapi terdeteksi versi: {getattr(bot, 'BOT_VERSION', 'LAMA')}.\n\n"
+            "Salin ulang kedua file dari paket yang sama, lalu hapus copy lama."
+        )
+except Exception as e:
+    _root = tk.Tk()
+    _root.withdraw()
+    messagebox.showerror("Import IA — Error Startup", str(e))
+    raise SystemExit(1)
 
 APP_TITLE = "Import IA"
 DL_FOLDER_NAME = "Download Draft IA"
@@ -2143,6 +2151,6 @@ class AutoImportApp(tk.Tk):
 
 
 if __name__ == "__main__":
-    print(f"=== {APP_TITLE} — ui_app.py v4.14 (pasangan accurate_bot.py v4.7) ===")
+    print(f"=== {APP_TITLE} — ui_app.py v4.15 (pasangan accurate_bot.py v4.7) ===")
     app = AutoImportApp()
     app.mainloop()

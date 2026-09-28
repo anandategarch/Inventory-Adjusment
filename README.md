@@ -30,14 +30,11 @@ Inventory-Adjusment/
 ├── README.md
 ├── 1. Download Draft IA/  ← Tool 1: filter + unduh XLS draf IA
 │   ├── unduh_xls_loop.py
-│   ├── filter_pembuat_data.py
-│   └── debug_filter.py
+│   └── filter_pembuat_data.py
 ├── 2. Import IA/           ← Tool 2: UI utama + Import IA bot
-│   ├── main.py             (entry point UI)
-│   ├── ui_app.py           (UI 5 tab — v4.14)
+│   ├── ui_app.py           (UI 5 tab — v4.15, entry point langsung)
 │   ├── accurate_bot.py     (Import IA logic)
-│   ├── ui_settings.json    (saved settings)
-│   └── MULAI_OTOMASI.bat   (optional fallback launcher)
+│   └── ui_settings.json    (saved settings)
 ├── 3. Download SJ GIS/     ← Tool 3: download SJ dari Pemindahan Barang
 │   ├── download_sj_gis.py  (v8.13 — env var support)
 │   ├── DETEKSI_HALAMAN.py  (diagnostic)
@@ -47,7 +44,7 @@ Inventory-Adjusment/
     ├── app.py              (V16 — + --cli mode for UI subprocess)
     ├── config.json         (Power BI URL, pages, restos, options)
     ├── requirements.txt    (playwright, Pillow)
-    ├── README_V14/V15/V16.txt
+    ├── README_V16.txt
     └── build_exe.bat       (packaging to .exe — niche)
 ```
 

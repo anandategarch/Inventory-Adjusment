@@ -21,7 +21,7 @@ echo  Tekan ENTER untuk membuka UI...
 pause >nul
 
 cd /d "%~dp02. Import IA"
-python main.py
+python ui_app.py
 if errorlevel 1 (
     echo.
     echo [ERROR] Gagal menjalankan UI. Pastikan:
