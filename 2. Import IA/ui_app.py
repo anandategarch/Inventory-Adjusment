@@ -1,6 +1,15 @@
 """
-ui_app.py — tampilan aplikasi Import IA (v4.17, pasangan accurate_bot.py v4.7).
+ui_app.py — tampilan aplikasi Import IA (v4.18, pasangan accurate_bot.py v4.7).
 Tab: Otomasi | Database COA & Keterangan | Download Draft IA | Download SJ GIS | Screen Shot Power BI.
+v4.18: REVERT SS tab Card 3 (Log Screenshot) ke grid layout. v4.17 pakai
+pack_propagate(False) + pack() + height=15 untuk ss_text, tapi ini bikin
+ss_log_wrap Frame stuck di 0px (pack_propagate mencegah child men-size parent,
+grid luar tidak mengalokasikan ruang cukup). Text widget menerima lines via
+_drain_queue tapi invisible. Fix: revert ke grid layout EXACTLY match pattern
+WORKING SJ GIS tab sj_text — columnconfigure(0, weight=1) +
+rowconfigure(0, weight=1) + sticky=nsew, NO pack_propagate, NO explicit
+height. Keep: Test Log button, wheel scroll (MouseWheel + Button-4/5),
+ss_log_card.rowconfigure(1, weight=1). Sj_text TIDAK diubah (working).
 v4.17: redesign Card 3 (Log Screenshot) di tab Screen Shot — Text widget
 sebelumnya pakai grid tanpa explicit height, jadi pada sebagian DPI / theme
 combo ukurannya jadi mendekati 0px (lines tetap diinsert via _drain_queue,
@@ -906,18 +915,16 @@ class AutoImportApp(tk.Tk):
                                       fg="#334155", padx=12, pady=8, font=F_BODY)
         self.ss_status_lbl.grid(row=6, column=0, sticky="ew", padx=14, pady=(0, 10))
 
-        # ---- Card 3: Log Screenshot (redesigned v4.17) --------------------
-        # Why redesign: prior layout used grid + no explicit Text height, so
-        # on some DPI / ttk-theme combos the Text widget ended up near-zero
-        # height. _drain_queue still inserted lines into it, but they were
-        # invisible (the widget was a 0px sliver). Switching to pack-based
-        # layout with pack_propagate(False) + explicit height=15 forces a
-        # tall, visible, scrollable Text that reliably expands to fill the
-        # card. Also adds a 'Test Log' button as a diagnostic: clicking it
-        # pushes 8 dummy lines through the same path as real subprocess
-        # output. If Test Log lines appear -> widget + drain_queue OK and the
-        # issue is in _ss_worker/subprocess. If Test Log shows nothing ->
-        # widget/drain_queue is broken.
+        # ---- Card 3: Log Screenshot (reverted v4.18 to grid layout) --------
+        # v4.17 used pack-based layout + pack_propagate(False) + height=15.
+        # This caused the ss_log_wrap Frame to stay at 0px (pack_propagate
+        # prevents children from sizing the parent, and the outer grid layout
+        # doesn't allocate enough space). The Text widget received lines via
+        # _drain_queue but was invisible. v4.18 reverts to grid-based layout
+        # EXACTLY matching the WORKING SJ GIS tab sj_text pattern (grid +
+        # columnconfigure/rowconfigure weight=1, sticky=nsew, NO
+        # pack_propagate, NO explicit height). Test Log + Bersihkan + Buka
+        # Output buttons row (grid row=0) and wheel scroll handlers retained.
         ss_log_card = self._card(ssview, "3. Log Screenshot")
         ss_log_card.grid(row=1, column=0, columnspan=2, sticky="nsew",
                          pady=(8, 0))
@@ -934,18 +941,18 @@ class AutoImportApp(tk.Tk):
         ttk.Button(ss_log_btns, text="Buka Output",
                    command=self._ss_open_output).pack(side="left")
 
-        # Log Text + Scrollbar (pack-based, more reliable fill-expand than grid)
+        # Log Text + Scrollbar (grid-based, matching SJ GIS sj_text pattern)
         ss_log_wrap = tk.Frame(ss_log_card, bg=C_TERM_BG)
         ss_log_wrap.grid(row=1, column=0, sticky="nsew", padx=14, pady=(4, 10))
-        ss_log_wrap.pack_propagate(False)  # prevent Text from shrinking the wrap
+        ss_log_wrap.columnconfigure(0, weight=1)
+        ss_log_wrap.rowconfigure(0, weight=1)
         self.ss_text = tk.Text(ss_log_wrap, bg=C_TERM_BG, fg="#dbeafe",
                                insertbackground="white", relief="flat",
-                               font=F_LOG, wrap="word", state="disabled",
-                               height=15)  # explicit tall height
-        self.ss_text.pack(side="left", fill="both", expand=True)
+                               font=F_LOG, wrap="word", state="disabled")
+        self.ss_text.grid(row=0, column=0, sticky="nsew")
         ss_log_sb = ttk.Scrollbar(ss_log_wrap, orient="vertical",
                                   command=self.ss_text.yview)
-        ss_log_sb.pack(side="right", fill="y")
+        ss_log_sb.grid(row=0, column=1, sticky="ns")
         self.ss_text.configure(yscrollcommand=ss_log_sb.set)
 
         # Wheel scroll (Linux Button-4/5 = up/down; Windows/Mac = MouseWheel)
@@ -2210,6 +2217,6 @@ class AutoImportApp(tk.Tk):
 
 
 if __name__ == "__main__":
-    print(f"=== {APP_TITLE} — ui_app.py v4.17 (pasangan accurate_bot.py v4.7) ===")
+    print(f"=== {APP_TITLE} — ui_app.py v4.18 (pasangan accurate_bot.py v4.7) ===")
     app = AutoImportApp()
     app.mainloop()
