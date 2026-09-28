@@ -286,10 +286,8 @@ def say_marker(msg):
     print(msg); sys.stdout.flush()
 
 def say_section(title):
-    """Print a major section header."""
-    say("=" * 60)
-    say(f" {title}")
-    say("=" * 60)
+    """Print a major section header (clean style, no === separators)."""
+    say(f"── {title} ──")
 
 def say_trans_header(seq, total, kode):
     """Print a per-transaction header."""
@@ -301,11 +299,10 @@ def say_step(label, status="OK"):
     say("  " + label + ("." * dots) + " " + status)
 
 def say_summary_box(lines):
-    """Print a summary box."""
-    say("=" * 60)
+    """Print a summary (clean style, no === box)."""
+    say("── RINGKASAN ──")
     for line in lines:
         say(f" {line}")
-    say("=" * 60)
 
 # ============================================================
 # CHROME CONNECTION

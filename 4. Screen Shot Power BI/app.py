@@ -1300,7 +1300,7 @@ class Engine:
                 for page_index, page_number in enumerate(pages, start=1):
                     if self._is_stop():
                         break
-                    self.log(f'\n════════ PAGE {page_number} ({page_index}/{len(pages)}) ════════')
+                    self.log(f'── PAGE {page_number} ({page_index}/{len(pages)}) ──')
                     page_error = False
                     page_setup_message = None
 

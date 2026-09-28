@@ -1,9 +1,10 @@
 """
-accurate_bot.py — logika otomasi Accurate Online (v4.7, pasangan ui_app.py v4.7).
+accurate_bot.py — logika otomasi Accurate Online (v4.8, pasangan ui_app.py v4.7).
 Flow terbukti: isi tanggal -> info -> upload -> konfirmasi -> simpan.
 Verifikasi ketat: tanggal, akun (harus sama target), cabang (reset + sama target).
 Pop-up: panduan upload diabaikan; hasil/error/stok diproses; LANJUTKAN otomatis.
 v4.7: database COA & Keterangan dibaca otomatis dari folder aplikasi.
+v4.8: branchSet verify pakai contains match (Accurate branch list ada kode prefix).
 """
 import os
 import re
@@ -16,7 +17,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-BOT_VERSION = "4.7"
+BOT_VERSION = "4.8"
 DEBUG_PORT = 9222
 
 MODE_APPROVE = "APPROVE"
@@ -587,7 +588,10 @@ def fill_info_lainnya(driver, account_search, memo_text, branch_text, log):
     human_pause(0.5, 1.0)
     verify = verify_form_observables(driver)
     verify["accountMatch"] = account_match
-    verify["branchSet"] = bool(chosen) and norm(chosen) == norm(branch_text)
+    # v4.8 fix: contains match — Accurate branch list has code prefix (e.g. "1187.SBRTUP")
+    # but file name branch_text doesn't (e.g. "SBRTUP"). Exact match fails.
+    # Use contains: norm("1187.sbrtup").find(norm("sbrtup")) != -1 → True
+    verify["branchSet"] = bool(chosen) and (norm(chosen) == norm(branch_text) or norm(branch_text) in norm(chosen))
     return verify
 
 
