@@ -2084,14 +2084,14 @@ class AutoImportApp(tk.Tk):
                     if bot.is_port_open(bot.DEBUG_PORT):
                         break
                 if not bot.is_port_open(bot.DEBUG_PORT):
-                    raise RuntimeError("Gagal membuka Chrome debugging.\nJalankan MULAI_OTOMASI.bat lalu login ke Accurate.")
+                    raise RuntimeError("Gagal membuka Chrome debugging.\nJalankan MULAI.bat (di root folder) lalu login ke Accurate, atau klik tombol 'Buka Chrome 9222' di tab Download SJ GIS.")
 
             opt = Options()
             opt.add_experimental_option("debuggerAddress", f"127.0.0.1:{bot.DEBUG_PORT}")
             try:
                 driver = webdriver.Chrome(options=opt)
             except Exception as e:
-                raise RuntimeError("Chrome Debugging belum aktif.\nJalankan MULAI_OTOMASI.bat, login, buka Penyesuaian Persediaan.\nDetail: " + str(e))
+                raise RuntimeError("Chrome Debugging belum aktif.\nJalankan MULAI.bat (di root folder), login ke Accurate, buka Penyesuaian Persediaan.\nAtau klik 'Buka Chrome 9222' di tab Download SJ GIS.\nDetail: " + str(e))
 
             self._queue_log("Terhubung ke Chrome.", "SUCCESS")
             self._queue_log("Mencari tab Penyesuaian Persediaan...")

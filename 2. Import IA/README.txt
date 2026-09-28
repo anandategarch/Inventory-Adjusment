@@ -1,14 +1,15 @@
 IMPORT IA (v4.5)
 ================
-Isi folder aplikasi (5 file):
-- main.py            : titik masuk
-- ui_app.py          : tampilan (UI)
+Isi folder aplikasi (3 file):
+- ui_app.py          : titik masuk + tampilan (UI)
 - accurate_bot.py    : logika otomasi Selenium + mapping
-- MULAI_OTOMASI.bat  : peluncur
 - README.txt         : dokumen ini
 
+Catatan: peluncur MULAI.bat berada di root folder repo (satu level di atas
+folder ini). MULAI.bat akan memanggil ui_app.py sebagai entry point.
+
 Cara menjalankan:
-1. Double-click MULAI_OTOMASI.bat
+1. Jalankan MULAI.bat di root folder repo
 2. Login Accurate Online di Chrome yang terbuka, buka Penyesuaian Persediaan
 3. Di UI: pilih Database Excel, Folder Induk, atur Tanggal
 4. Periksa preview mapping (hijau=siap, abu=dilewati, merah=tidak cocok)
