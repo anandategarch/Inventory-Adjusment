@@ -24,6 +24,7 @@ from selenium.common.exceptions import (
 DEBUG_PORT = 9222
 MAX_ROWS = 0
 MAX_CONSECUTIVE_FAIL = 3
+DELAY_BETWEEN_TRANSACTIONS = 2.5  # seconds — prevent Accurate rate-limit after 4+ rapid prints
 DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads")
 NOMOR_RE = re.compile(r"IA\.\d{4}\.\d{2}\.\d+")
 
@@ -805,6 +806,13 @@ def main():
                 if consecutive >= MAX_CONSECUTIVE_FAIL:
                     say(f"\nBerhenti: {consecutive} siklus gagal beruntun.")
                     break
+
+            # Delay between transactions to avoid Accurate rate-limiting
+            # (confirmed: 4+ rapid prints cause print overlay to stop appearing)
+            seq = i + 1
+            if seq < limit:  # don't delay after last transaction
+                say(f"  Jeda {DELAY_BETWEEN_TRANSACTIONS}s sebelum transaksi berikutnya...")
+                time.sleep(DELAY_BETWEEN_TRANSACTIONS)
     except KeyboardInterrupt:
         say("\nDihentikan manual.")
 
