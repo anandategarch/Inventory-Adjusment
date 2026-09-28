@@ -10,6 +10,7 @@ import os
 import sys
 import re
 import random
+from datetime import datetime
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -41,8 +42,27 @@ def human_click(min_s=0.25, max_s=0.70):
     time.sleep(random.uniform(min_s, max_s))
 
 def say(msg):
-    print(msg)
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"{ts} {msg}")
     sys.stdout.flush()
+
+def say_section(title):
+    """Print a major section header."""
+    say("=" * 60)
+    say(f" {title}")
+    say("=" * 60)
+
+def say_step(label, status="OK"):
+    """Print a step with aligned label + status."""
+    dots = max(2, 35 - len(label))
+    say("  " + label + ("." * dots) + " " + status)
+
+def say_summary_box(lines):
+    """Print a summary box."""
+    say("=" * 60)
+    for line in lines:
+        say(f" {line}")
+    say("=" * 60)
 
 def is_ui_mode():
     return os.environ.get("IA_UI_MODE") == "1"
@@ -560,39 +580,38 @@ def read_branches():
 # ============================================================
 def main():
     TARGET_CODES = read_branches()
-    say("Memulai filter Pembuat Data...")
-    say(f"Target: {', '.join(TARGET_CODES)}")
-    print()
+    say_section("FILTER PEMBUAT DATA \u2014 Start")
+    say(f"  Target  : {', '.join(TARGET_CODES)}")
 
     try:
         driver = connect_chrome()
     except Exception as e:
-        say(f"Gagal: {e}")
+        say(f"  \u274c Gagal: {e}")
         pause_if_standalone()
         return 1
 
-    say("Terhubung ke Chrome.")
+    say("  Chrome  : terhubung (port 9222)")
     human()
 
-    say("Mencari tab list Penyesuaian Persediaan...")
+    say_step("Cari tab list")
     if not find_list_tab(driver):
-        say("Gagal: Halaman list tidak ditemukan.")
+        say("  \u274c Gagal: Halaman list tidak ditemukan.")
         pause_if_standalone()
         return 1
 
-    say("Tab list ditemukan.")
+    say_step("Tab list", "OK")
     wait_loading_done(driver)
     rows_before = wait_grid_stable(driver, timeout=8, checks=1)
     human()
 
     chip = wait_for(driver, By.CSS_SELECTOR, SEL_CHIP, timeout=2)
     if chip:
-        say("Chip 'Pembuat Data' sudah ada, lewati corong & checkbox.")
+        say_step("Chip Pembuat Data", "EXISTS")
     else:
-        say("Membuka panel filter...")
+        say_step("Buka panel filter")
         funnel = wait_for(driver, By.CSS_SELECTOR, SEL_FUNNEL, timeout=8)
         if not funnel:
-            say("Gagal: Tombol corong tidak ditemukan.")
+            say("  \u274c Gagal: Tombol corong tidak ditemukan.")
             pause_if_standalone()
             return 1
         human_click()
@@ -601,12 +620,12 @@ def main():
 
         panel = wait_for(driver, By.CSS_SELECTOR, SEL_PANEL, timeout=6)
         if not panel:
-            say("Gagal: Panel dropdown filter tidak terbuka.")
+            say("  \u274c Gagal: Panel dropdown tidak terbuka.")
             pause_if_standalone()
             return 1
         label = wait_for(driver, By.XPATH, XP_LABEL_PEMBUAT, timeout=5)
         if not label:
-            say("Gagal: Label 'Pembuat Data' tidak ditemukan.")
+            say("  \u274c Gagal: Label 'Pembuat Data' tidak ditemukan.")
             pause_if_standalone()
             return 1
         human_click()
@@ -615,22 +634,22 @@ def main():
 
         chip = wait_for(driver, By.CSS_SELECTOR, SEL_CHIP, timeout=10)
         if not chip:
-            say("Gagal: Chip tidak muncul setelah dicentang.")
+            say("  \u274c Gagal: Chip tidak muncul.")
             pause_if_standalone()
             return 1
 
     selected = 0
-    say("Memilih kode target...")
+    say_section("PILIH KODE TARGET")
     for code in TARGET_CODES:
         switch_back_to_list_frame(driver)
 
         already, _ = is_code_selected(driver, code)
         if already:
-            say(f"  {code}: sudah ada, dilewati.")
+            say_step(code, "EXISTS")
             selected += 1
             continue
 
-        say(f"  {code}: mengetik dan memilih saran...")
+        say_step(code, "...")
         ok_code = False
         for attempt in range(2):
             already, _ = is_code_selected(driver, code)
@@ -691,28 +710,31 @@ def main():
 
         if ok_code:
             selected += 1
-            say(f"  {code}: berhasil diterapkan.")
+            say_step(code, "OK")
         else:
-            say(f"  {code}: GAGAL dipilih.")
+            say_step(code, "FAIL")
         human()
 
-    say("Verifikasi akhir...")
+    say_step("Verifikasi akhir")
     wait_loading_done(driver)
     switch_back_to_list_frame(driver)
     rows_after = wait_grid_stable(driver)
     codes_final = read_selected_codes(driver, timeout=5)
-
-    say(f"Baris sebelum: {rows_before} | Baris setelah: {rows_after}")
-    say(f"Kode terpilih di panel: {', '.join(codes_final) if codes_final else '(tidak terbaca)'}")
-    say(f"Kode target tercapai: {selected}/{len(TARGET_CODES)}")
-    print()
+    say("")
+    summary = [
+        f"Baris   : {rows_before} \u2192 {rows_after}",
+        f"Kode    : {', '.join(codes_final) if codes_final else '(tidak terbaca)'}",
+        f"Hasil   : {selected}/{len(TARGET_CODES)} cabang diterapkan",
+    ]
+    say_summary_box(summary)
+    say("")
 
     if selected > 0:
-        say(f"Filter selesai. {selected} cabang berhasil diterapkan.")
+        say(f"  \u2705 Selesai \u2014 {selected} cabang diterapkan")
         pause_if_standalone()
         return 0
     else:
-        say("Filter gagal: tidak ada cabang yang berhasil ditambahkan.")
+        say("  \u274c Filter gagal \u2014 tidak ada cabang diterapkan")
         pause_if_standalone()
         return 1
 
@@ -720,6 +742,6 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception as e:
-        say(f"Error tak terduga: {type(e).__name__}: {e}")
+        say(f"  \u274c Error tak terduga: {type(e).__name__}: {e}")
         pause_if_standalone()
         sys.exit(1)

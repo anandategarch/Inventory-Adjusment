@@ -122,7 +122,9 @@ class Engine:
         self._cached_page_number = None
 
     def log(self, msg):
-        self.log_cb(f'[{datetime.now().strftime("%H:%M:%S")}] {msg}')
+        """Pass msg to callback. The callback (CLI log_cb or GUI add_log)
+        is responsible for adding the HH:MM:SS timestamp prefix."""
+        self.log_cb(msg)
 
     def stop(self):
         self.stop_requested = True
@@ -1643,7 +1645,7 @@ class App(tk.Tk):
         self.logbox=tk.Text(lf,wrap='word',font=('Consolas',9),state='disabled'); self.logbox.pack(side='left',fill='both',expand=True)
         sb=ttk.Scrollbar(lf,command=self.logbox.yview); sb.pack(side='right',fill='y'); self.logbox.configure(yscrollcommand=sb.set)
 
-    def add_log(self,msg): self.q.put(('log',msg))
+    def add_log(self,msg): self.q.put(('log',f'{datetime.now().strftime("%H:%M:%S")} {msg}'))
     def progress(self,c,t,label): self.q.put(('progress',c,t,label))
     def done(self,r): self.q.put(('done',r))
 
@@ -1734,7 +1736,8 @@ def run_cli():
     output_format = str(CONFIG.get('output_format', 'PNG')).upper().strip()
 
     def log_cb(msg):
-        print(msg, flush=True)
+        ts = datetime.now().strftime("%H:%M:%S")
+        print(f"{ts} {msg}", flush=True)
 
     def progress_cb(cur, total, label):
         print(f"PROGRESS: {cur}/{total} {label}", flush=True)

@@ -258,6 +258,7 @@ import time
 import socket
 import re
 import traceback
+from datetime import datetime
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -278,7 +279,34 @@ KODE_RE = re.compile(r"IT\.\d{4}\.\d{2}\.\d+")
 DL_EXTS = (".pdf", ".xls", ".xlsx", ".doc", ".docx", ".png", ".jpg", ".jpeg")
 
 def say(msg):
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"{ts} {msg}"); sys.stdout.flush()
+
+def say_marker(msg):
+    """Print a machine-readable marker line WITHOUT timestamp (for UI parsing)."""
     print(msg); sys.stdout.flush()
+
+def say_section(title):
+    """Print a major section header."""
+    say("=" * 60)
+    say(f" {title}")
+    say("=" * 60)
+
+def say_trans_header(seq, total, kode):
+    """Print a per-transaction header."""
+    say("-- [" + str(seq) + "/" + str(total) + "] " + str(kode) + " " + "-" * max(0, 40 - len(f"[{seq}/{total}] {kode}")))
+
+def say_step(label, status="OK"):
+    """Print a step with aligned label + status."""
+    dots = max(2, 35 - len(label))
+    say("  " + label + ("." * dots) + " " + status)
+
+def say_summary_box(lines):
+    """Print a summary box."""
+    say("=" * 60)
+    for line in lines:
+        say(f" {line}")
+    say("=" * 60)
 
 # ============================================================
 # CHROME CONNECTION
@@ -287,8 +315,8 @@ def connect_chrome():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.5)
         if s.connect_ex(("127.0.0.1", DEBUG_PORT)) != 0:
-            say(f"[ERROR] Port debugging {DEBUG_PORT} tidak aktif.")
-            say(f"  Buka Chrome: chrome.exe --remote-debugging-port={DEBUG_PORT} --user-data-dir=\"C:\\ChromeDebugProfile\"")
+            say(f"  \u274c [ERROR] Port debugging {DEBUG_PORT} tidak aktif.")
+            say(f"     \u2192 Buka Chrome: chrome.exe --remote-debugging-port={DEBUG_PORT} --user-data-dir=\"C:\\ChromeDebugProfile\"")
             sys.exit(1)
     opt = Options()
     opt.add_experimental_option("debuggerAddress", f"127.0.0.1:{DEBUG_PORT}")
@@ -1507,93 +1535,94 @@ def rename_download_file(original_path, kode, tanggal, cabang):
 def process_one_kode(driver, kode, fr, seq, total):
     """Proses 1 kode: search → klik cell → detail → btnCommentAttachment → dropdown → attachment → download → cleanup."""
     t0 = time.time()
-    say(f"\n[{seq}/{total}] Kode: {kode}")
+    say_trans_header(seq, total, kode)
     try:
         # 1. Search
-        say(f"  [1/8] Search kode...")
+        say_step("Search kode")
         if not search_kode(driver, kode, fr):
-            say(f"  [ERROR] Kode tidak ditemukan di grid setelah search.")
-            say(f"  (Mungkin kode bukan transaksi tanggal hari ini — cek filter date)")
+            say_step("Search kode", "FAIL")
+            say(f"     → Kode tidak ditemukan (cek filter date — mungkin bukan transaksi hari ini)")
             return False, "E_SEARCH"
-        say(f"  [OK] Kode ditemukan di grid.")
+        say_step("Search", "OK")
 
         # 2. Single-click cell → detail
-        say(f"  [2/8] Single-click cell (buka detail)...")
+        say_step("Klik cell (buka detail)")
         how = click_cell_open_detail(driver, fr, kode)
         if not how:
-            say(f"  [ERROR] Cell tidak bisa di-klik.")
+            say_step("Klik cell", "FAIL")
             return False, "E_CLICK_CELL"
-        say(f"  [OK] Diklik via {how}. Tunggu detail...")
+        say_step("Klik cell", "OK")
         if not wait_detail_open(driver, kode, timeout=15):
-            say(f"  [WARNING] Detail tidak terdeteksi, tapi lanjut cari btnCommentAttachment.")
+            say_step("Detail", "WARN")
 
         # 3. Click i#btnCommentAttachment
-        say(f"  [3/8] Klik i#btnCommentAttachment (Komentar/Dokumen)...")
+        say_step("Klik Dokumen/Komentar")
         how = click_comment_attachment(driver)
         if not how:
-            say(f"  [ERROR] i#btnCommentAttachment tidak ditemukan.")
-            say(f"  (Detail mungkin belum kebuka. Coba jalankan ulang, atau cek manual.)")
+            say_step("Klik Dokumen", "FAIL")
+            say(f"     \u2192 Detail mungkin belum kebuka. Coba jalankan ulang, atau cek manual.")
             recover_to_list(driver, kode)
             return False, "E_BTN_COMMENT"
-        say(f"  [OK] btnCommentAttachment diklik via {how}. Tunggu dropdown...")
+        say_step("Klik Dokumen", "OK")
 
         # 4. Click first <a> di dropdown
-        say(f"  [4/8] Klik <a> pertama di dropdown (buka attachment panel)...")
+        say_step("Klik dropdown Dokumen")
         how = click_first_dropdown_item(driver, timeout=8)
         if not how:
             # v8.5 DIAGNOSTIC: jangan SKIP dibilang "no document" — itu MASKS bug.
             # Kita nggak tahu apakah dokumen ada sampe bisa detect dropdown dgn reliable.
             # Fail dgn E_DROPDOWN. (v8.7: step 3.5 dump dihapus — switch_top+execute_script
             # di dump bikin dropdown auto-close. Jadi nggak ada dump utk lihat lagi.)
-            say(f"  [ERROR] Dropdown tidak ditemukan setelah btnCommentAttachment (8s wait).")
-            say(f"  Kemungkinan: (a) SJ ini TANPA dokumen (dropdown emang nggak muncul),")
-            say(f"  atau (b) btnCommentAttachment click nggak trigger jQuery dropdown handler.")
+            say_step("Klik dropdown", "FAIL")
+            say(f"     → Dropdown tidak ditemukan (8s). Mungkin SJ ini TANPA dokumen,")
+            say(f"       atau btnCommentAttachment click nggak trigger jQuery dropdown handler.")
             recover_to_list(driver, kode)
             return False, "E_DROPDOWN"
-        say(f"  [OK] Dropdown item diklik via {how}. Tunggu attachment panel...")
+        say_step("Klik dropdown", "OK")
 
         # 5. Wait attachment panel
-        say(f"  [5/8] Tunggu attachment panel...")
+        say_step("Tunggu attachment panel")
         if not wait_attachment_panel(driver, timeout=15):
-            say(f"  [WARNING] Attachment panel tidak terdeteksi. Tetap coba cari download icon.")
+            say_step("Attachment panel", "WARN")
 
         # 6. Click icon-download-2 → download
-        say(f"  [6/8] Klik i.icon-download-2 (download file)...")
+        say_step("Klik download")
         before = snapshot_downloads()
         how = click_download_icon(driver, timeout=10)
         if not how:
-            say(f"  [ERROR] i.icon-download-2 tidak ditemukan di attachment panel.")
-            say(f"  (Mungkin belum ada dokumen yg di-upload utk SJ ini. Cek manual.)")
+            say_step("Klik download", "FAIL")
+            say(f"     → i.icon-download-2 tidak ditemukan. Mungkin belum ada dokumen yg di-upload utk SJ ini.")
             recover_to_list(driver, kode)
             return False, "E_DOWNLOAD_ICON"
-        say(f"  [OK] Download icon diklik via {how}. Tunggu file (maks 90s)...")
+        say_step("Klik download", "OK")
 
         # 7. Wait file
-        say(f"  [7/8] Tunggu file tersimpan (maks 90s)...")
+        say_step("Tunggu file tersimpan")
         fname = wait_new_download(before, timeout=90)
         if not fname:
-            say(f"  [ERROR] Download tidak selesai 90s. Cek manual: {DOWNLOAD_DIR}")
+            say_step("Tunggu file", "FAIL")
+            say(f"     \u2192 Download tidak selesai 90s. Cek manual: {DOWNLOAD_DIR}")
             recover_to_list(driver, kode)
             return False, "E_DOWNLOAD_TIMEOUT"
         final = os.path.join(DOWNLOAD_DIR, fname)
-        say(f"  [OK] File tersimpan: {final}")
+        say(f"  File: {os.path.basename(final)}")
 
         # 7.5 Tutup attachment overlay DULU (supaya detail form accessible utk tab 'Info Lainnya').
         #     Tab 'Info Lainnya' ada di detail form (BUKAN di attachment overlay), jadi overlay
         #     harus ditutup dulu sebelum klik tab. (v8.3 — lihat catatan STEP 6 di docstring.)
-        say(f"  [7.5/8] Tutup attachment overlay (buka akses ke detail form)...")
+        say_step("Tutup attachment overlay")
         close_attachment_overlay(driver, timeout=5)
 
         # 7.6 Klik tab 'Info Lainnya' + extract Cabang (v8.3) + extract Tanggal (v8.9)
-        say(f"  [7.6/8] Klik tab 'Info Lainnya' + extract Cabang + Tanggal...")
+        say_step("Baca Cabang + Tanggal")
         if click_info_lainnya_tab(driver, timeout=8):
             cabang = extract_cabang_value(driver, timeout=10)
             if cabang:
                 cabang = sanitize_for_filename(cabang)
-                say(f"    [OK] Cabang: {cabang}")
+                say(f"    Cabang : {cabang}")
             else:
                 cabang = "TanpaCabang"
-                say(f"    [WARNING] Cabang tidak terbaca, pakai fallback: {cabang}")
+                say(f"    Cabang : {cabang} (fallback)")
             # v8.9: extract Tanggal (date value from input[name='transDate']).
             # Dari v8.8 dump utk 20451: [14] INPUT:transDate value='24/09/2026'.
             # Format: replace '/' -> '-' -> '24-09-2026'. Fallback literal 'Tanggal'.
@@ -1601,27 +1630,27 @@ def process_one_kode(driver, kode, fr, seq, total):
             if tanggal_raw:
                 tanggal = tanggal_raw.replace('/', '-')  # "24/09/2026" -> "24-09-2026"
                 tanggal = sanitize_for_filename(tanggal)
-                say(f"    [OK] Tanggal: {tanggal}")
+                say(f"    Tanggal: {tanggal}")
             else:
                 tanggal = "Tanggal"  # fallback literal (v8.3-v8.8 behavior)
-                say(f"    [WARNING] Tanggal tidak terbaca, pakai literal: {tanggal}")
+                say(f"    Tanggal: {tanggal} (fallback)")
         else:
             cabang = "TanpaCabang"
             tanggal = "Tanggal"
-            say(f"    [WARNING] Tab 'Info Lainnya' tidak ditemukan, pakai fallback: cabang={cabang}, tanggal={tanggal}")
+            say_step("Baca Cabang+Tanggal", "WARN")
 
         # 7.7 Rename file: {kode}_{tanggal}_{cabang}.{ext}  (v8.9: tanggal = date value)
-        say(f"  [7.7/8] Rename file: {kode}_{tanggal}_{cabang}{os.path.splitext(final)[1]}...")
+        say_step("Rename file")
         final = rename_download_file(final, kode, tanggal, cabang)
         fname = os.path.basename(final)
-        say(f"    [OK] File renamed: {fname}")
+        say(f"    \u2192 {kode}_{tanggal}_{cabang}{os.path.splitext(final)[1]}")
 
         # 8. Tutup tab detail
-        say(f"  [8/8] Tutup tab detail...")
+        say_step("Tutup detail")
         close_detail_tab(driver, kode, timeout=10)
         # v8.8: user confirm ada loading setelah close tab detail -> tunggu search box
         # (input[name=keyword]) visible lagi = list view udah ready buat kode berikutnya.
-        say(f"  [8.5] Tunggu list view ready (search box visible)...")
+        say_step("Tunggu list ready")
         end = time.time() + 10
         list_ready = False
         while time.time() < end:
@@ -1638,56 +1667,52 @@ def process_one_kode(driver, kode, fr, seq, total):
             except: pass
             time.sleep(0.5)
         if list_ready:
-            say(f"  [OK] List view ready (search box visible).")
+            say_step("List ready", "OK")
         else:
-            say(f"  [WARNING] Search box belum visible setelah 10s. Kode berikutnya mungkin gagal search.")
+            say_step("List ready", "WARN")
 
         dt = time.time() - t0
-        say(f"  [DONE] {kode} -> {fname} ({dt:.1f}s)")
+        say(f"  \u2705 Selesai \u2014 {fname} ({dt:.1f}s)")
         return True, fname
 
     except Exception as e:
-        say(f"  [ERROR] {type(e).__name__}: {e}")
+        say(f"  \u274c [ERROR] {type(e).__name__}: {e}")
         traceback.print_exc()
         recover_to_list(driver, kode)
         return False, "E_UNEXPECTED"
 
 def main():
-    say("=" * 60)
-    say("  DOWNLOAD SJ GIS - PEMINDAHAN BARANG (v8.13)")
-    say("=" * 60)
-    say(f"Folder download: {DOWNLOAD_DIR}")
+    say_section("DOWNLOAD SJ GIS — PEMINDAHAN BARANG (v8.13)")
+    say(f"  Folder  : {DOWNLOAD_DIR}")
     if not os.path.isdir(DOWNLOAD_DIR):
-        say(f"[ERROR] Folder Downloads tidak ditemukan: {DOWNLOAD_DIR}")
+        say(f"  ❌ Folder Downloads tidak ditemukan: {DOWNLOAD_DIR}")
         sys.exit(1)
 
     # v8.12: baca dari env var SJ_GIS_KODES (dari UI subprocess). Kalau kosong, input() manual.
     raw = os.environ.get("SJ_GIS_KODES", "").strip()
     if raw:
-        say(f"  [INFO] Kode dari UI (env var): {raw[:80]}")
+        say(f"  Kode    : {raw[:80]} (dari UI)")
     else:
         raw = input("\nMasukkan kode SJ (1 kode, atau multi dipisah koma):\n  misal: IT.2026.09.19805\n  atau : IT.2026.09.19805, IT.2026.09.20451, IT.2026.09.20447\n\nKode: ").strip()
         if not raw:
             raw = "IT.2026.09.19805"
-            say(f"  [INFO] Kosong -> pakai default: {raw}")
+            say(f"  Kode    : {raw} (default)")
     # Parse multi-kode
     kodes = [k.strip() for k in raw.split(",") if k.strip()]
     kodes = [k for k in kodes if KODE_RE.match(k) or True]  # accept all non-empty
-    say(f"\nTotal kode diproses: {len(kodes)}")
-    for i, k in enumerate(kodes, 1):
-        say(f"  [{i}/{len(kodes)}] {k}")
+    say(f"  Total   : {len(kodes)} kode")
 
-    say(f"\n[0] Connect Chrome port 9222...")
+    say_step("Connect Chrome 9222")
     driver = connect_chrome()
-    say(f"  [OK] Terhubung. Tab aktif: {driver.current_url[:60]}...")
+    say_step("Chrome", "OK")
 
-    say(f"\n[0] Cari frame list...")
+    say_step("Cari frame list")
     fr = find_list_frame(driver, timeout=12)
     if not fr:
-        say("  [ERROR] Frame list tidak ditemukan.")
-        say("  Pastikan halaman LIST Pemindahan Barang terbuka & login aktif.")
+        say_step("Frame list", "FAIL")
+        say("     → Pastikan halaman LIST Pemindahan Barang terbuka & login aktif.")
         sys.exit(1)
-    say(f"  [OK] Frame: {fr}")
+    say_step("Frame list", "OK")
 
     # Loop proses tiap kode
     results = []
@@ -1695,25 +1720,24 @@ def main():
         ok, result = process_one_kode(driver, kode, fr, i, len(kodes))
         results.append((kode, ok, result))
         if i < len(kodes):
-            say(f"\n  Jeda 1 detik sebelum kode berikutnya...")
+            say(f"  (cooldown 1s)")
             time.sleep(1)
             # re-find frame (mungkin berubah)
             fr2 = find_list_frame(driver, timeout=8)
             if fr2: fr = fr2
 
     # Summary
-    say("\n" + "=" * 60)
-    say("  RINGKASAN HASIL")
-    say("=" * 60)
-    success = 0
+    say("")
+    success = sum(1 for _, ok, _ in results if ok)
+    summary = [f"Hasil   : {success}/{len(kodes)} berhasil ({100*success//len(kodes) if kodes else 0}%)"]
+    summary.append("File diunduh:")
     for kode, ok, result in results:
-        status = "OK" if ok else "FAIL"
-        say(f"  [{status}] {kode} -> {result}")
         if ok:
-            success += 1
-    say(f"\n  Berhasil: {success}/{len(kodes)}")
-    say(f"  Folder   : {DOWNLOAD_DIR}")
-    say("=" * 60)
+            summary.append(f"  • {kode} → {result}")
+        else:
+            summary.append(f"  • {kode} → FAIL")
+    summary.append(f"Folder  : {DOWNLOAD_DIR}")
+    say_summary_box(summary)
 
     # v8.13: output marker lines for UI parsing (placed AFTER the human-readable
     # summary loop, BEFORE the final closing banner). UI (ui_app.py v4.13)
@@ -1721,16 +1745,16 @@ def main():
     # If a list is empty -> marker still emitted with empty payload after colon.
     ok_kodes = [kode for kode, ok, result in results if ok]
     failed_kodes = [kode for kode, ok, result in results if not ok]
-    say(f"SJ_RESULT_OK: {', '.join(ok_kodes)}")
-    say(f"SJ_RESULT_FAIL: {', '.join(failed_kodes)}")
+    say_marker(f"SJ_RESULT_OK: {', '.join(ok_kodes)}")
+    say_marker(f"SJ_RESULT_FAIL: {', '.join(failed_kodes)}")
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        say(f"\n[FATAL] {type(e).__name__}: {e}")
+        say(f"  ❌ [FATAL] {type(e).__name__}: {e}")
         traceback.print_exc()
-        say("\nKirim error ini ke saya, jangan tutup dulu.")
+        say("     → Kirim error ini ke saya, jangan tutup dulu.")
     # v8.12: kalau dipanggil via UI (SJ_GIS_KODES set / IA_UI_MODE=1),
     # skip prompt akhir (subprocess tidak punya TTY -> input() akan hang / EOF).
     if not os.environ.get("SJ_GIS_KODES") and not os.environ.get("IA_UI_MODE"):

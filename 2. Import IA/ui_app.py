@@ -1,6 +1,13 @@
 """
-ui_app.py — tampilan aplikasi Import IA (v5.1, pasangan accurate_bot.py v4.7).
+ui_app.py — tampilan aplikasi Import IA (v5.2, pasangan accurate_bot.py v4.7).
 Tab: Otomasi | Database COA & Keterangan | Download Draft IA | Download SJ GIS | Screen Shot Power BI.
+v5.2: Professional log formatting across all 3 tool scripts (unduh_xls_loop.py,
+  filter_pembuat_data.py, download_sj_gis.py, app.py) + UI cleanup. Removed
+  "Cek Chrome" button from SJ GIS tab (auto-check 3s after launch + auto-check
+  on Mulai Download is sufficient). Removed "Deteksi Ulang" button from SJ GIS
+  tab (auto-detect on startup sufficient). Updated SJ GIS worker log parser to
+  detect new ✅ Selesai success marker (in addition to legacy [DONE]).
+
 v5.1: Chrome anti-throttle flags di _sj_launch_chrome
   (--disable-background-timer-throttling,
    --disable-backgrounding-occluded-windows,
@@ -831,10 +838,9 @@ class AutoImportApp(tk.Tk):
         ttk.Button(sj_ctl_btns, text="🌐  Buka Chrome 9222",
                    style="Success.TButton",
                    command=self._sj_launch_chrome).pack(side="left", padx=(0, 8))
-        ttk.Button(sj_ctl_btns, text="Deteksi Ulang",
-                   command=self._sj_detect_script).pack(side="left", padx=(0, 8))
-        ttk.Button(sj_ctl_btns, text="Cek Chrome",
-                   command=self._sj_check_chrome).pack(side="left")
+        # v5.2: "Deteksi Ulang" + "Cek Chrome" buttons removed — auto-detect
+        # on startup + auto-check 3s after "Buka Chrome 9222" + auto-check on
+        # "Mulai Download" is sufficient (less clutter, same functionality).
 
         sj_run_btns = tk.Frame(sj_ctl_card, bg=C_CARD)
         sj_run_btns.grid(row=4, column=0, sticky="ew", padx=14, pady=(0, 6))
@@ -1290,9 +1296,9 @@ class AutoImportApp(tk.Tk):
                     self.sj_status_lbl.configure(text="Chrome 9222 siap. Klik Mulai Download.")
                 else:
                     self._sj_log_line("[WARNING] Chrome blm terdeteksi di port 9222. "
-                                      "Tunggu Chrome selesai load, lalu klik 'Cek Chrome'.")
+                                      "Tunggu Chrome selesai load, lalu klik 'Buka Chrome 9222' lagi.")
                     self.sj_status_lbl.configure(
-                        text="Chrome launching... klik 'Cek Chrome' untuk verifikasi.")
+                        text="Chrome launching... tunggu atau klik 'Buka Chrome 9222' lagi.")
             threading.Thread(target=_recheck, daemon=True).start()
         except Exception as e:
             messagebox.showerror(APP_TITLE, f"Gagal meluncurkan Chrome: {e}", parent=self)
@@ -1515,9 +1521,11 @@ class AutoImportApp(tk.Tk):
                     failed = []
                 self.ui_queue.put(("sj_failed", failed))
             # parse [DONE] / [OK] / [FAIL] / [ERROR]
-            if "[DONE]" in line or " [OK] " in line or line.strip().endswith("[OK]"):
+            # v5.2: detect new professional format (✅ Selesai / ❌) in addition
+            # to legacy markers ([DONE] / [OK] / [FAIL] / [ERROR]).
+            if "[DONE]" in line or "✅ Selesai" in line or " [OK] " in line or line.strip().endswith("[OK]"):
                 self.ui_queue.put(("sj_ok", line))
-            elif "[FAIL]" in line or "[ERROR]" in line:
+            elif "[FAIL]" in line or "[ERROR]" in line or "❌" in line:
                 self.ui_queue.put(("sj_fail", line))
         proc.wait()
         self.ui_queue.put(("sj_done", (None, total)))
@@ -2374,6 +2382,6 @@ class AutoImportApp(tk.Tk):
 
 
 if __name__ == "__main__":
-    print(f"=== {APP_TITLE} — ui_app.py v5.1 (pasangan accurate_bot.py v4.7) ===")
+    print(f"=== {APP_TITLE} — ui_app.py v5.2 (pasangan accurate_bot.py v4.7) ===")
     app = AutoImportApp()
     app.mainloop()

@@ -52,8 +52,31 @@ def settle(s=0.1):
     time.sleep(s)
 
 def say(msg):
-    print(msg)
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"{ts} {msg}")
     sys.stdout.flush()
+
+def say_section(title):
+    """Print a major section header."""
+    say("=" * 60)
+    say(f" {title}")
+    say("=" * 60)
+
+def say_trans_header(seq, total, kode):
+    """Print a per-transaction header."""
+    say(f"\u2500\u2500 [{seq}/{total}] {kode} " + "\u2500" * max(0, 40 - len(f"[{seq}/{total}] {kode}")))
+
+def say_step(label, status="OK"):
+    """Print a step with aligned label + status."""
+    dots = max(2, 35 - len(label))
+    say(f"  {label}{'.' * dots} {status}")
+
+def say_summary_box(lines):
+    """Print a summary box."""
+    say("=" * 60)
+    for line in lines:
+        say(f" {line}")
+    say("=" * 60)
 
 # ============================================================
 # JS HELPERS
@@ -475,31 +498,37 @@ def recover_to_list(driver):
         clear_mark(driver, cl["path"])
     return find_list_frame(driver, timeout=8)
 
-def hard_reset_list(driver):
+def hard_reset_list(driver, seq=None, kind="scheduled"):
     """Hard reset: click btnRefresh to reload the list page.
 
     Resets SlickGrid stylesheet (fixes 'Cannot find stylesheet' error after
     many SPA navigations) + clears 173+ residual overlay elements from DOM.
 
-    Called every HARD_RESET_EVERY_N transactions to prevent grid 'mepet' issue.
+    Called every HARD_RESET_EVERY_N transactions to prevent grid 'mepet' issue,
+    and on failure as a recovery reset before the next transaction.
     """
-    say("  \U0001f504 Hard reset: refresh list page (reset SlickGrid + clear DOM)...")
+    if kind == "recovery":
+        say("  \U0001f504 Recovery reset (gagal \u2192 reset grid)")
+    elif seq is not None:
+        say(f"  \U0001f504 Refresh list (reset #{seq})")
+    else:
+        say("  \U0001f504 Refresh list")
     try:
         switch_path(driver, [])
         # Try btnRefresh first
         btn = driver.find_element(By.CSS_SELECTOR, "button[name='btnRefresh']")
         if btn:
             smart_click(driver, btn)
-            say("    [OK] btnRefresh diklik, tunggu list re-render...")
+            say_step("Refresh", "OK")
             time.sleep(3)  # wait for list to re-render + SlickGrid to re-init
             # Re-find the list frame (may have changed after refresh)
             if find_list_frame(driver, timeout=12):
-                say("    [OK] List frame re-found setelah refresh.")
+                say_step("List siap", "OK")
             else:
-                say("    [WARNING] List frame tidak ditemukan setelah refresh.")
+                say_step("List siap", "FAIL")
             return True
     except Exception as e:
-        say(f"    [WARNING] btnRefresh gagal: {e}")
+        say_step("Refresh", f"FAIL ({e})")
     # Fallback: try btnToggleList (toggle list view on/off)
     try:
         switch_path(driver, [])
@@ -510,10 +539,10 @@ def hard_reset_list(driver):
             smart_click(driver, btn)  # toggle back on
             time.sleep(3)
             find_list_frame(driver, timeout=12)
-            say("    [OK] btnToggleList toggle (fallback refresh).")
+            say_step("Refresh (toggle)", "OK")
             return True
     except Exception as e:
-        say(f"    [WARNING] btnToggleList fallback juga gagal: {e}")
+        say_step("Refresh (toggle)", f"FAIL ({e})")
     return False
 
 def collect_nomor_list(driver):
@@ -657,7 +686,6 @@ def trigger_print_and_wait(driver):
 
     try:
         ActionChains(driver).key_down(Keys.CONTROL).send_keys('p').key_up(Keys.CONTROL).perform()
-        say("    Memicu cetak via Ctrl+P...")
         ux = wait_report_overlay(driver, timeout=12)
         if ux:
             return ux, "Ctrl+P"
@@ -665,7 +693,7 @@ def trigger_print_and_wait(driver):
         pass
 
     if _click_print_button(driver):
-        say("    Memicu cetak via tombol Cetak...")
+        say_step("Cetak (tombol Cetak)", "FALLBACK")
         ux = wait_report_overlay(driver, timeout=15)
         if ux:
             return ux, "tombol Cetak"
@@ -679,7 +707,7 @@ def trigger_print_and_wait(driver):
     settle(0.1)
     try:
         ActionChains(driver).key_down(Keys.CONTROL).send_keys('p').key_up(Keys.CONTROL).perform()
-        say("    Retry cetak via Ctrl+P...")
+        say_step("Cetak (retry Ctrl+P)", "RETRY")
         ux = wait_report_overlay(driver, timeout=12)
         if ux:
             return ux, "Ctrl+P (retry)"
@@ -720,39 +748,39 @@ def close_detail_tab(driver, nomor):
 # ============================================================
 def process_nomor(driver, nomor, seq, limit, row_h, suffix_map):
     t0 = time.time()
-    say(f"\n[{seq}/{limit}] {nomor}")
+    say_trans_header(seq, limit, nomor)
     try:
         recover_to_list(driver)
         if not find_list_frame(driver, timeout=8):
             raise AppError("E_LIST", "grid tidak ditemukan setelah recovery")
 
-        say("  Klik baris...")
         how = click_row_by_nomor(driver, nomor, seq - 1, row_h)
         if not how:
             raise AppError("E_ROW", f"baris {nomor} tidak ditemukan")
+        say_step("Klik baris")
 
-        say("  Membuka detail...")
+        say_step("Buka detail")
         driver.switch_to.default_content()
         if not wait_detail_open(driver, nomor, timeout=15):
             raise AppError("E_DETAIL", f"input {nomor} tidak muncul")
 
-        say("  Menentukan Keterangan...")
+        say_step("Baca Keterangan")
         suffix = sanitize_suffix((suffix_map or {}).get(nomor, ""))
         if suffix:
-            say(f"  Suffix (grid): {suffix}")
+            say(f"    {suffix}")
         else:
             suffix = read_keterangan_suffix(driver)
             if suffix:
-                say(f"  Suffix (detail): {suffix}")
+                say(f"    {suffix} (dari detail)")
             else:
-                say("  Keterangan kosong; nama file tetap asli.")
+                say("    (tanpa suffix)")
 
-        say("  Memicu cetak...")
+        say_step("Cetak (Ctrl+P)")
         ux, method = trigger_print_and_wait(driver)
         if not ux:
             raise AppError("E_PRINT", "overlay report tidak muncul")
 
-        say("  Mengunduh XLS...")
+        say_step("Unduh XLS")
         before = snapshot_downloads()
         el = find_marked(driver, ux["path"])
         if not el:
@@ -770,63 +798,60 @@ def process_nomor(driver, nomor, seq, limit, row_h, suffix_map):
         final_name = os.path.basename(final_path)
         say(f"  File: {final_name}")
 
-        say("  Menutup report & tab detail...")
+        say_step("Tutup detail + report")
         close_report(driver)
         close_detail_tab(driver, nomor)
         if not wait_detail_closed(driver, nomor, timeout=15):
             raise AppError("E_CLOSE_TAB", f"tab detail {nomor} masih terbuka")
 
         dt = time.time() - t0
-        say(f"  Selesai ({dt:.1f} detik)")
+        say(f"  \u2705 Selesai \u2014 {dt:.1f}s")
         return True, final_name
 
     except AppError as e:
         penjelasan, saran = ERROR_CATALOG.get(e.code, ("-", "-"))
-        say(f"  Gagal: {penjelasan}")
-        say(f"  Saran: {saran}")
+        say(f"  \u274c Gagal: {penjelasan}")
+        say(f"     \u2192 {saran}")
         return False, e.code
     except Exception as e:
-        say(f"  Error: {type(e).__name__}: {e}")
+        say(f"  \u274c Error: {type(e).__name__}: {e}")
         return False, "E_UNEXPECTED"
 
 # ============================================================
 # MAIN
 # ============================================================
 def main():
-    say("Memulai loop unduh XLS (FULL SPEED)...")
-    say(f"Folder download: {DOWNLOAD_DIR}")
-    print()
-
+    say_section("DOWNLOAD DRAFT IA \u2014 Pipeline Start")
+    say(f"  Folder   : {DOWNLOAD_DIR}")
     if not os.path.isdir(DOWNLOAD_DIR):
-        say(f"Folder download tidak ditemukan: {DOWNLOAD_DIR}")
+        say(f"  \u274c Folder tidak ditemukan")
         try:
             os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-            say("  Folder dibuat.")
+            say_step("Buat folder", "OK")
         except Exception as e:
-            say(f"  Gagal membuat folder: {e}")
+            say_step("Buat folder", f"FAIL ({e})")
 
     try:
         driver = connect_chrome()
     except AppError as e:
         penjelasan, saran = ERROR_CATALOG.get(e.code, ("-", "-"))
-        say(f"Gagal: {penjelasan}")
+        say(f"  \u274c Gagal: {penjelasan}")
         return 1
     except Exception as e:
-        say(f"Error: {type(e).__name__}: {e}")
+        say(f"  \u274c Error: {type(e).__name__}: {e}")
         return 1
-    say("Terhubung ke Chrome debugging.")
-    print()
+    say("  Chrome   : terhubung (port 9222)")
 
     recover_to_list(driver)
-    say("Mengumpulkan daftar transaksi + Keterangan dari grid...")
+    say_step("Kumpul transaksi + Keterangan")
     order, row_h, suffix_map = collect_nomor_list(driver)
     if not order:
-        say("  Gagal: tidak ada transaksi terbaca di grid.")
+        say("  \u274c Gagal: tidak ada transaksi terbaca di grid.")
         return 1
     limit = len(order) if MAX_ROWS == 0 else min(MAX_ROWS, len(order))
-    say(f"Ditemukan {len(order)} transaksi, akan diproses {limit}.")
-    say(f"Suffix terbaca dari grid: {len(suffix_map)} baris.")
-    print()
+    say(f"  Transaksi: {len(order)} ditemukan")
+    say(f"  Suffix   : {len(suffix_map)} baris terbaca")
+    say("")
 
     hasil, gagal, processed = [], [], set()
     consecutive = 0
@@ -846,21 +871,20 @@ def main():
                 gagal.append((nomor, info))
                 consecutive += 1
                 if consecutive >= MAX_CONSECUTIVE_FAIL:
-                    say(f"\nBerhenti: {consecutive} siklus gagal beruntun.")
+                    say(f"  \u26d4 Berhenti: {consecutive} gagal beruntun")
                     break
 
             # Delay between transactions to avoid Accurate rate-limiting
             # (confirmed: 4+ rapid prints cause print overlay to stop appearing)
             seq = i + 1
             if seq < limit:  # don't delay after last transaction
-                say(f"  Jeda {DELAY_BETWEEN_TRANSACTIONS}s sebelum transaksi berikutnya...")
+                say(f"  (cooldown {DELAY_BETWEEN_TRANSACTIONS}s)")
                 time.sleep(DELAY_BETWEEN_TRANSACTIONS)
 
             # Hard reset every N transactions to prevent SlickGrid stylesheet breakage
             # + DOM pollution from 173+ residual overlay elements
             if seq < limit and seq % HARD_RESET_EVERY_N == 0:
-                say(f"\n  \U0001f504 Hard reset #{seq} (every {HARD_RESET_EVERY_N} transaksi)...")
-                hard_reset_list(driver)
+                hard_reset_list(driver, seq=seq, kind="scheduled")
                 # Re-collect suffix_map after refresh (grid re-rendered, rows may have changed)
                 # Actually, the existing code collects suffix_map BEFORE the loop. After refresh,
                 # the grid re-renders with the same data (filter still applied). So suffix_map
@@ -873,34 +897,36 @@ def main():
             # This works WITH the scheduled reset above: scheduled runs every 4, this runs
             # only on failure, so worst case = reset after EVERY failure + every 4 on success.
             if not ok and seq < limit:
-                say(f"  \U0001f504 Recovery reset (transaksi gagal, reset grid sebelum lanjut)...")
-                hard_reset_list(driver)
+                hard_reset_list(driver, seq=seq, kind="recovery")
     except KeyboardInterrupt:
-        say("\nDihentikan manual.")
+        say("  ⛔ Dihentikan manual")
 
     total_dt = time.time() - t_start
-    print()
-    say("Rekap:")
-    say(f"  Durasi: {total_dt:.1f} detik")
-    say(f"  Berhasil: {len(hasil)}")
-    for nomor, fname in hasil:
-        say(f"    {nomor} -> {fname}")
+    say("")
+    pct = 100 * len(hasil) // limit if limit else 0
+    summary = [f"Durasi  : {total_dt:.1f}s ({int(total_dt)//60}m {total_dt%60:.0f}s)",
+               f"Hasil   : {len(hasil)}/{limit} berhasil ({pct}%)"]
+    if hasil:
+        summary.append("File diunduh:")
+        for i, (nomor, fname) in enumerate(hasil, 1):
+            summary.append(f"  {i}. {nomor} → {fname}")
     if gagal:
-        say(f"  Gagal: {len(gagal)}")
+        summary.append(f"Gagal   : {len(gagal)}")
         for nomor, code in gagal:
-            say(f"    {nomor} ({code})")
-    print()
+            summary.append(f"  • {nomor} ({code})")
+    say_summary_box(summary)
+    say("")
 
     if len(hasil) > 0:
-        say(f"Selesai. {len(hasil)} file berhasil diunduh.")
+        say(f"  ✅ Selesai — {len(hasil)} file diunduh")
         return 0
     else:
-        say("Tidak ada file yang berhasil diunduh.")
+        say("  ❌ Tidak ada file yang diunduh")
         return 1
 
 if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception as e:
-        say(f"Error tak terduga: {type(e).__name__}: {e}")
+        say(f"  ❌ Error tak terduga: {type(e).__name__}: {e}")
         sys.exit(1)
