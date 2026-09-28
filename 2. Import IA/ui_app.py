@@ -1,6 +1,40 @@
 """
-ui_app.py — tampilan aplikasi Import IA (v4.19, pasangan accurate_bot.py v4.7).
+ui_app.py — tampilan aplikasi Import IA (v5.0, pasangan accurate_bot.py v4.7).
 Tab: Otomasi | Database COA & Keterangan | Download Draft IA | Download SJ GIS | Screen Shot Power BI.
+v5.0: MAJOR REFACTOR — ganti inline log Text widgets (dl_text/sj_text/ss_text)
+yang 0px/invisible (lines di-insert via _drain_queue tapi widget tinggi 0px,
+tak kelihatan — root cause: grid layout gives 0px to log row on sebagian
+DPI/resolution combo) dengan popup log windows berbasis SimpleLogPopup
+class (tk.Toplevel — pola proven-VISIBLE dari Otomasi tab's ProcessLogWindow).
+
+Changes:
+  1. SimpleLogPopup class — popup dgn Text + scrollbar + Bersihkan btn, hidden
+     by default, shown via _show_*_logwin atau auto-open di _start_*.
+  2. 3 popup instances (dl_logwin, sj_logwin, ss_logwin) via _ensure pattern.
+  3. Card 3 (inline log) DIHAPUS dari DL, SJ, SS tabs (was 0px invisible).
+  4. 'Log Proses' button di-Card 2 tiap tab (open popup).
+  5. _drain_queue route dl_log/sj_log/ss_log -> popup.append() (bukan inline
+     Text insert); dl_done/sj_done/ss_done -> popup.append('Selesai').
+  6. Auto-open popup + clear saat klik 'Mulai' (_start_download/_start_sj_download/_start_ss).
+  7. _dl_clear/_sj_clear/_ss_clear -> popup.clear(); _ss_test_log -> popup.append.
+  8. _dl_text_wheel/_sj_log_wheel/_ss_text_wheel DIHAPUS (no inline Text utk
+     scroll). _sj_text_wheel DIPERTAHANKAN (scroll sj_kodes_text input box,
+     BUKAN log — penamaan misleading tapi bindingnya ke input box).
+  9. Card 4 'Kode Gagal' (SJ tab, sj_failed_text) TIDAK diubah — terpisah
+     dari log, hanya display kode yg gagal.
+ 10. Fix folder detection: _detect_dl_folder sekarang cari folder dgn SUBSTRING
+     match 'Download Draft IA' (akomodasi prefix '1. ' dll) — sebelumnya
+     exact-name match terhadap DL_FOLDER_NAME='Download Draft IA' GAGAL karena
+     folder sebenarnya bernama '1. Download Draft IA'.
+ 11. _on_close destroy popup windows (dl_logwin, sj_logwin, ss_logwin).
+ 12. Buka Folder Unduhan (SJ) + Buka Output (SS) dipindah ke Card 2 button row
+     (sebelumnya di Card 3 log button row yg dihapus).
+
+Root cause of inline Text 0px: grid layout gives 0px to log row on some
+DPI/resolution combos. v4.17-v4.19 tried pack, pack_propagate, grid minsize
+— none worked reliably. Popup window (tk.Toplevel) is ALWAYS visible
+(independent of tab grid layout) — same pattern as the proven-working
+ProcessLogWindow (Otomasi tab, sejak v3.x).
 v4.19: FIX log Text widgets (sj_text, ss_text, dl_text) yang 0px/invisible.
 Root cause: grid rowconfigure(N, weight=1) TANPA minsize memungkinkan row
 di-shrink ke 0px bila parent layout tidak mengalokasikan ruang cukup. Lines
@@ -319,6 +353,85 @@ class ProcessLogWindow(tk.Toplevel):
         self.lift()
 
 
+class SimpleLogPopup(tk.Toplevel):
+    """Popup log window (proven visible — unlike inline Text which gets 0px).
+    One instance per tab (DL, SJ, SS). Hidden by default, shown via button or
+    auto-open. Reusable (withdraw on close, deiconify on show — NOT destroyed).
+
+    v5.0: replaces the broken inline log Text widgets (dl_text/sj_text/ss_text)
+    which had 0px height on some DPI/resolution combos. Pattern is identical to
+    the proven-working ProcessLogWindow (Otomasi tab) — tk.Toplevel is ALWAYS
+    visible, independent of the parent tab's grid layout.
+    """
+    def __init__(self, master, title="Log"):
+        super().__init__(master)
+        self.title(title)
+        self.geometry("900x550")
+        self.minsize(600, 300)
+        # Text + scrollbar
+        wrap = tk.Frame(self, bg=C_TERM_BG)
+        wrap.pack(fill="both", expand=True, padx=6, pady=6)
+        self.text = tk.Text(wrap, bg=C_TERM_BG, fg="#dbeafe", insertbackground="white",
+                            relief="flat", font=F_LOG, wrap="word", state="disabled")
+        self.text.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(wrap, orient="vertical", command=self.text.yview)
+        sb.pack(side="right", fill="y")
+        self.text.configure(yscrollcommand=sb.set)
+        # Wheel scroll (Linux Button-4/5 = up/down; Windows/Mac = MouseWheel)
+        self.text.bind("<MouseWheel>", lambda e: self.text.yview_scroll(_wheel_steps(e), "units"))
+        self.text.bind("<Button-4>", lambda e: self.text.yview_scroll(_wheel_steps(e), "units"))
+        self.text.bind("<Button-5>", lambda e: self.text.yview_scroll(_wheel_steps(e), "units"))
+        # Clear button
+        btn_frame = tk.Frame(self, bg=C_FOOTER)
+        btn_frame.pack(fill="x", padx=6, pady=(0, 6))
+        ttk.Button(btn_frame, text="Bersihkan", command=self.clear).pack(side="right")
+        # Hidden by default (call .show() to deiconify)
+        self.withdraw()
+        self.protocol("WM_DELETE_WINDOW", self.hide)
+
+    def append(self, line):
+        """Thread-safe: called from _drain_queue (main thread) or directly from
+        main-thread methods. Append line + auto-scroll to end."""
+        try:
+            self.text.configure(state="normal")
+            self.text.insert("end", str(line) + "\n")
+            self.text.see("end")
+            self.text.configure(state="disabled")
+        except Exception:
+            pass
+
+    def clear(self):
+        try:
+            self.text.configure(state="normal")
+            self.text.delete("1.0", "end")
+            self.text.configure(state="disabled")
+        except Exception:
+            pass
+
+    def show(self):
+        """Show + raise popup (topmost briefly to lift above main window)."""
+        try:
+            self.deiconify()
+            self.lift()
+            self.attributes("-topmost", True)
+            self.after(200, lambda: self.attributes("-topmost", False))
+        except Exception:
+            pass
+
+    def hide(self):
+        """Withdraw (hide) — don't destroy (reusable via .show())."""
+        try:
+            self.withdraw()
+        except Exception:
+            pass
+
+    def is_visible(self):
+        try:
+            return self.winfo_exists() and self.winfo_ismapped()
+        except Exception:
+            return False
+
+
 class AutoImportApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -367,6 +480,15 @@ class AutoImportApp(tk.Tk):
         self.ss_stop = threading.Event()
         self.ss_proc = None
         self.ss_script_path = None
+
+        # v5.0: popup log windows — one per tab (DL, SJ, SS). Lazy-init via
+        # _ensure_*_logwin (mirrors _ensure_logwin utk Otomasi tab). Hidden by
+        # default, shown via 'Log Proses' button or auto-opened when 'Mulai'
+        # clicked (clear+show in _start_download/_start_sj_download/_start_ss).
+        # Replaces broken inline dl_text/sj_text/ss_text (0px invisible).
+        self.dl_logwin = None
+        self.sj_logwin = None
+        self.ss_logwin = None
 
         self._setup_style()
         self._build_ui()
@@ -580,7 +702,8 @@ class AutoImportApp(tk.Tk):
         dlview.pack(fill="both", expand=True, padx=18, pady=16)
         dlview.columnconfigure(0, weight=1)
         dlview.columnconfigure(1, weight=1)
-        dlview.rowconfigure(1, weight=1, minsize=300)
+        # v5.0: row 1 (Card 3 log) removed — popup log window replaces inline
+        # Text. No rowconfigure(1, weight=1, minsize=300) needed anymore.
 
         src_card = self._card(dlview, "1. Sumber & Lokasi")
         src_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 8))
@@ -619,7 +742,11 @@ class AutoImportApp(tk.Tk):
         self.dl_start_btn.pack(side="left", padx=(0, 8))
         self.dl_stop_btn = ttk.Button(dl_btns, text="■  Hentikan", style="Danger.TButton",
                                       command=self._stop_download, state="disabled")
-        self.dl_stop_btn.pack(side="left")
+        self.dl_stop_btn.pack(side="left", padx=(0, 8))
+        # v5.0: 'Log Proses' button — opens popup log window (replaces inline
+        # dl_text which was 0px invisible on some DPI/resolution combos).
+        ttk.Button(dl_btns, text="📋  Log Proses",
+                   command=self._show_dl_logwin).pack(side="left")
 
         dl_prog = tk.Frame(ctl_card, bg=C_CARD)
         dl_prog.grid(row=5, column=0, sticky="ew", padx=14, pady=(0, 4))
@@ -633,31 +760,22 @@ class AutoImportApp(tk.Tk):
                                       bg=C_INFO_BG, fg="#334155", padx=12, pady=8, font=F_BODY)
         self.dl_status_lbl.grid(row=6, column=0, sticky="ew", padx=14, pady=(0, 10))
 
-        log_card = self._card(dlview, "3. Log Download")
-        log_card.grid(row=1, column=0, columnspan=2, sticky="nsew")
-        log_card.columnconfigure(0, weight=1)
-        log_card.rowconfigure(1, weight=1, minsize=300)
-        dl_log_wrap = tk.Frame(log_card, bg=C_TERM_BG)
-        dl_log_wrap.grid(row=1, column=0, sticky="nsew", padx=14, pady=(4, 12))
-        dl_log_wrap.columnconfigure(0, weight=1)
-        dl_log_wrap.rowconfigure(0, weight=1, minsize=280)
-        self.dl_text = tk.Text(dl_log_wrap, bg=C_TERM_BG, fg="#dbeafe", insertbackground="white",
-                               relief="flat", font=F_LOG, wrap="word", state="disabled")
-        self.dl_text.grid(row=0, column=0, sticky="nsew")
-        dl_sb = ttk.Scrollbar(dl_log_wrap, orient="vertical", command=self.dl_text.yview)
-        dl_sb.grid(row=0, column=1, sticky="ns")
-        self.dl_text.configure(yscrollcommand=dl_sb.set)
-        self.dl_text.bind("<MouseWheel>", self._dl_text_wheel)
-        self.dl_text.bind("<Button-4>", self._dl_text_wheel)
-        self.dl_text.bind("<Button-5>", self._dl_text_wheel)
-        ttk.Button(log_card, text="Bersihkan", command=self._dl_clear).grid(row=2, column=0, sticky="e", padx=14, pady=(0, 10))
+        # v5.0: Card 3 (Log Download) DIHAPUS — diganti popup log window
+        # (SimpleLogPopup, buka via 'Log Proses' button di Card 2 atas, atau
+        # auto-open saat klik 'Mulai Unduh XLS'). Inline dl_text Text widget
+        # 0px invisible pada sebagian DPI/resolution combo — root cause gagal
+        # diperbaiki oleh v4.17/v4.18/v4.19 (pack/grid/minsize — none worked
+        # reliably). Popup window (tk.Toplevel) selalu visible independent of
+        # tab grid layout. Lihat _ensure_dl_logwin + _show_dl_logwin +
+        # _drain_queue dl_log handler.
 
         # ================= TAB DOWNLOAD SJ GIS (v4.11) =================
         sjview = ttk.Frame(tab_sj, style="TFrame")
         sjview.pack(fill="both", expand=True, padx=18, pady=16)
         sjview.columnconfigure(0, weight=1)
         sjview.columnconfigure(1, weight=1)
-        sjview.rowconfigure(1, weight=1, minsize=300)
+        # v5.0: row 1 (Card 3 log) removed — popup log window replaces sj_text.
+        # Card 4 (Kode Gagal) sekarang di row 1 (sebelumnya row 2).
 
         # ---- Card 1: Input Kode SJ ----
         sj_in_card = self._card(sjview, "1. Input Kode SJ")
@@ -720,7 +838,13 @@ class AutoImportApp(tk.Tk):
         self.sj_stop_btn = ttk.Button(sj_run_btns, text="■  Hentikan",
                                       style="Danger.TButton", state="disabled",
                                       command=self._stop_sj_download)
-        self.sj_stop_btn.pack(side="left")
+        self.sj_stop_btn.pack(side="left", padx=(0, 8))
+        # v5.0: 'Log Proses' + 'Buka Folder Unduhan' (dipindah dari Card 3 log
+        # button row yang dihapus). Popup log window replaces inline sj_text.
+        ttk.Button(sj_run_btns, text="📋  Log Proses",
+                   command=self._show_sj_logwin).pack(side="left", padx=(0, 8))
+        ttk.Button(sj_run_btns, text="📂  Buka Folder Unduhan",
+                   command=self._sj_open_folder).pack(side="left")
 
         sj_prog = tk.Frame(sj_ctl_card, bg=C_CARD)
         sj_prog.grid(row=5, column=0, sticky="ew", padx=14, pady=(0, 4))
@@ -734,37 +858,19 @@ class AutoImportApp(tk.Tk):
                                       bg=C_INFO_BG, fg="#334155", padx=12, pady=8, font=F_BODY)
         self.sj_status_lbl.grid(row=6, column=0, sticky="ew", padx=14, pady=(0, 10))
 
-        # ---- Card 3: Log Download SJ ----
-        sj_log_card = self._card(sjview, "3. Log Download SJ")
-        sj_log_card.grid(row=1, column=0, columnspan=2, sticky="nsew")
-        sj_log_card.columnconfigure(0, weight=1)
-        sj_log_card.rowconfigure(1, weight=1, minsize=300)
-        sj_log_wrap = tk.Frame(sj_log_card, bg=C_TERM_BG)
-        sj_log_wrap.grid(row=1, column=0, sticky="nsew", padx=14, pady=(4, 8))
-        sj_log_wrap.columnconfigure(0, weight=1)
-        sj_log_wrap.rowconfigure(0, weight=1, minsize=280)
-        self.sj_text = tk.Text(sj_log_wrap, bg=C_TERM_BG, fg="#dbeafe", insertbackground="white",
-                               relief="flat", font=F_LOG, wrap="word", state="disabled")
-        self.sj_text.grid(row=0, column=0, sticky="nsew")
-        sj_log_sb = ttk.Scrollbar(sj_log_wrap, orient="vertical", command=self.sj_text.yview)
-        sj_log_sb.grid(row=0, column=1, sticky="ns")
-        self.sj_text.configure(yscrollcommand=sj_log_sb.set)
-        self.sj_text.bind("<MouseWheel>", self._sj_log_wheel)
-        self.sj_text.bind("<Button-4>", self._sj_log_wheel)
-        self.sj_text.bind("<Button-5>", self._sj_log_wheel)
-        sj_log_btns = tk.Frame(sj_log_card, bg=C_CARD)
-        sj_log_btns.grid(row=2, column=0, sticky="e", padx=14, pady=(0, 10))
-        ttk.Button(sj_log_btns, text="Buka Folder Unduhan",
-                   command=self._sj_open_folder).pack(side="right", padx=(8, 0))
-        ttk.Button(sj_log_btns, text="Bersihkan",
-                   command=self._sj_clear).pack(side="right")
+        # v5.0: Card 3 (Log Download SJ) DIHAPUS — diganti popup log window
+        # (SimpleLogPopup, buka via 'Log Proses' button di Card 2 atas, atau
+        # auto-open saat klik 'Mulai Download'). Inline sj_text Text widget
+        # 0px invisible — popup window selalu visible. Lihat _ensure_sj_logwin
+        # + _show_sj_logwin + _drain_queue sj_log handler. 'Buka Folder
+        # Unduhan' button dipindah ke Card 2 sj_run_btns.
 
-        # ---- Card 4: Kode Gagal (v4.13, row 2, col 0+1, compact fixed height) ----
+        # ---- Card 4: Kode Gagal (v4.13, v5.0: moved to row 1, col 0+1, compact fixed height) ----
         # Built manually (NOT via _card() helper) so we can keep a reference to
         # the title Label and update its text with the failed-count later
         # (e.g. '4. Kode Gagal (2)').
         sj_fail_card = ttk.Frame(sjview, style="Card.TFrame", padding=0)
-        sj_fail_card.grid(row=2, column=0, columnspan=2, sticky="ew", padx=0, pady=(8, 0))
+        sj_fail_card.grid(row=1, column=0, columnspan=2, sticky="ew", padx=0, pady=(8, 0))
         sj_fail_card.columnconfigure(0, weight=1)
         self.sj_fail_title_lbl = tk.Label(sj_fail_card, text="4. Kode Gagal (0)",
                                          bg=C_CARD, fg="#111827",
@@ -807,7 +913,7 @@ class AutoImportApp(tk.Tk):
         ssview.pack(fill="both", expand=True, padx=18, pady=16)
         ssview.columnconfigure(0, weight=1)
         ssview.columnconfigure(1, weight=1)
-        ssview.rowconfigure(1, weight=1, minsize=300)
+        # v5.0: row 1 (Card 3 log) removed — popup log window replaces ss_text.
 
         # ---- Card 1: Konfigurasi ----
         ss_cfg_card = self._card(ssview, "1. Konfigurasi")
@@ -896,8 +1002,9 @@ class AutoImportApp(tk.Tk):
         ttk.Checkbutton(ss_row2, text="Force-click Next Page fallback",
                        variable=self.ss_opt_force).pack(side="left")
 
-        # Run/Stop buttons (v4.17: 'Buka Output' moved to Card 3 log button row
-        # next to Test Log + Bersihkan, so this row only needs Mulai + Hentikan)
+        # Run/Stop buttons (v5.0: 'Buka Output' moved back here from Card 3 log
+        # button row (Card 3 dihapus); 'Log Proses' button added utk open popup
+        # log window. Mulai + Hentikan + Log Proses + Buka Output in one row.)
         ss_run_btns = tk.Frame(ss_ctl_card, bg=C_CARD)
         ss_run_btns.grid(row=4, column=0, sticky="ew", padx=14, pady=(0, 6))
         self.ss_start_btn = ttk.Button(ss_run_btns, text="\u25b6  Mulai Screenshot",
@@ -908,6 +1015,10 @@ class AutoImportApp(tk.Tk):
                                      style="Danger.TButton", state="disabled",
                                      command=self._stop_ss)
         self.ss_stop_btn.pack(side="left", padx=(0, 8))
+        ttk.Button(ss_run_btns, text="📋  Log Proses",
+                   command=self._show_ss_logwin).pack(side="left", padx=(0, 8))
+        ttk.Button(ss_run_btns, text="📂  Buka Output",
+                   command=self._ss_open_output).pack(side="left")
 
         # Progress bar + counter
         ss_prog = tk.Frame(ss_ctl_card, bg=C_CARD)
@@ -925,50 +1036,20 @@ class AutoImportApp(tk.Tk):
                                       fg="#334155", padx=12, pady=8, font=F_BODY)
         self.ss_status_lbl.grid(row=6, column=0, sticky="ew", padx=14, pady=(0, 10))
 
-        # ---- Card 3: Log Screenshot (reverted v4.18 to grid layout) --------
-        # v4.17 used pack-based layout + pack_propagate(False) + height=15.
-        # This caused the ss_log_wrap Frame to stay at 0px (pack_propagate
-        # prevents children from sizing the parent, and the outer grid layout
-        # doesn't allocate enough space). The Text widget received lines via
-        # _drain_queue but was invisible. v4.18 reverts to grid-based layout
-        # EXACTLY matching the WORKING SJ GIS tab sj_text pattern (grid +
-        # columnconfigure/rowconfigure weight=1, sticky=nsew, NO
-        # pack_propagate, NO explicit height). Test Log + Bersihkan + Buka
-        # Output buttons row (grid row=0) and wheel scroll handlers retained.
-        ss_log_card = self._card(ssview, "3. Log Screenshot")
-        ss_log_card.grid(row=1, column=0, columnspan=2, sticky="nsew",
-                         pady=(8, 0))
-        ss_log_card.columnconfigure(0, weight=1)
-        ss_log_card.rowconfigure(1, weight=1, minsize=300)
-
-        # Log buttons row (Test Log + Bersihkan + Buka Output)
-        ss_log_btns = tk.Frame(ss_log_card, bg=C_CARD)
-        ss_log_btns.grid(row=0, column=0, sticky="ew", padx=14, pady=(10, 4))
-        ttk.Button(ss_log_btns, text="Test Log",
-                   command=self._ss_test_log).pack(side="left", padx=(0, 8))
-        ttk.Button(ss_log_btns, text="Bersihkan",
-                   command=self._ss_clear).pack(side="left", padx=(0, 8))
-        ttk.Button(ss_log_btns, text="Buka Output",
-                   command=self._ss_open_output).pack(side="left")
-
-        # Log Text + Scrollbar (grid-based, matching SJ GIS sj_text pattern)
-        ss_log_wrap = tk.Frame(ss_log_card, bg=C_TERM_BG)
-        ss_log_wrap.grid(row=1, column=0, sticky="nsew", padx=14, pady=(4, 10))
-        ss_log_wrap.columnconfigure(0, weight=1)
-        ss_log_wrap.rowconfigure(0, weight=1, minsize=280)
-        self.ss_text = tk.Text(ss_log_wrap, bg=C_TERM_BG, fg="#dbeafe",
-                               insertbackground="white", relief="flat",
-                               font=F_LOG, wrap="word", state="disabled")
-        self.ss_text.grid(row=0, column=0, sticky="nsew")
-        ss_log_sb = ttk.Scrollbar(ss_log_wrap, orient="vertical",
-                                  command=self.ss_text.yview)
-        ss_log_sb.grid(row=0, column=1, sticky="ns")
-        self.ss_text.configure(yscrollcommand=ss_log_sb.set)
-
-        # Wheel scroll (Linux Button-4/5 = up/down; Windows/Mac = MouseWheel)
-        self.ss_text.bind("<MouseWheel>", self._ss_text_wheel)
-        self.ss_text.bind("<Button-4>", self._ss_text_wheel)
-        self.ss_text.bind("<Button-5>", self._ss_text_wheel)
+        # v5.0: Card 3 (Log Screenshot) DIHAPUS — diganti popup log window
+        # (SimpleLogPopup, buka via 'Log Proses' button di Card 2 atas, atau
+        # auto-open saat klik 'Mulai Screenshot'). Inline ss_text Text widget
+        # 0px invisible pada sebagian DPI/resolution combo — root cause gagal
+        # diperbaiki oleh v4.17/v4.18/v4.19 (pack/grid/minsize — none worked
+        # reliably). Popup window (tk.Toplevel) selalu visible independent of
+        # tab grid layout. Lihat _ensure_ss_logwin + _show_ss_logwin +
+        # _drain_queue ss_log handler. 'Buka Output' button dipindah ke Card 2
+        # ss_run_btns (sebelumnya di Card 3 log button row).
+        #
+        # v4.17 'Test Log' button juga dihapus (sebelumnya di Card 3 log button
+        # row). Test functionality tersisa di method _ss_test_log (utk
+        # diagnostic jika dipanggil manual), tapi tidak ada UI button lagi —
+        # user verify popup via 'Log Proses' button +Mulai Screenshot run.
 
         # ---- Inisialisasi indikator SS (auto-detect app.py + load config.json) ----
         self._ss_detect_script()
@@ -985,24 +1066,16 @@ class AutoImportApp(tk.Tk):
         if steps:
             self.tree.yview_scroll(steps, "units")
 
-    def _dl_text_wheel(self, e):
-        steps = _wheel_steps(e)
-        if steps:
-            self.dl_text.yview_scroll(steps, "units")
-
     def _sj_text_wheel(self, e):
+        # v5.0: NOTE — this method name is misleading. It scrolls sj_kodes_text
+        # (the INPUT box in Card 1, NOT the log). The log Text widget (sj_text)
+        # was removed in v5.0 — its wheel handler was _sj_log_wheel (also removed).
+        # KEPT here because sj_kodes_text input box still binds to it (lines in
+        # Card 1 sj_in_card block). Removing this would break input box scroll.
         steps = _wheel_steps(e)
         if steps:
             try:
                 self.sj_kodes_text.yview_scroll(steps, "units")
-            except Exception:
-                pass
-
-    def _sj_log_wheel(self, e):
-        steps = _wheel_steps(e)
-        if steps:
-            try:
-                self.sj_text.yview_scroll(steps, "units")
             except Exception:
                 pass
 
@@ -1067,7 +1140,24 @@ class AutoImportApp(tk.Tk):
     def _detect_dl_folder(self):
         app_dir = os.path.dirname(os.path.abspath(__file__))
         parent = os.path.dirname(app_dir)
-        cands = [os.path.join(parent, DL_FOLDER_NAME), os.path.join(app_dir, DL_FOLDER_NAME)]
+        # v5.0: substring match — folder mungkin bernama '1. Download Draft IA'
+        # (prefixed dgn angka urutan) atau varian lain. Sebelumnya (v4.x)
+        # pakai exact-name match terhadap DL_FOLDER_NAME='Download Draft IA' ->
+        # GAGAL karena folder sebenarnya bernama '1. Download Draft IA'.
+        # Sekarang scan parent ATAU app_dir utk folder yg namanya mengandung
+        # substring 'Download Draft IA' (case-sensitive — match exactly as in
+        # DL_FOLDER_NAME). Exact-name match tetap dicoba dulu (utk kompatibilitas
+        # backward bila folder tanpa prefix).
+        cands = []
+        for base in (parent, app_dir):
+            cands.append(os.path.join(base, DL_FOLDER_NAME))  # exact-name fallback
+            try:
+                for name in os.listdir(base):
+                    if (DL_FOLDER_NAME in name
+                            and os.path.isdir(os.path.join(base, name))):
+                        cands.append(os.path.join(base, name))
+            except Exception:
+                pass
         self.dl_folder = next((c for c in cands if os.path.isdir(c)), "")
         self.unduh_path = os.path.join(self.dl_folder, "unduh_xls_loop.py") if self.dl_folder else ""
         self.filter_path = os.path.join(self.dl_folder, "filter_pembuat_data.py") if self.dl_folder else ""
@@ -1095,16 +1185,16 @@ class AutoImportApp(tk.Tk):
             messagebox.showwarning(APP_TITLE, f"Tidak bisa membuka folder unduhan:\n{e}", parent=self)
 
     # ================= LOG DOWNLOAD =================
+    # v5.0: _dl_log_line append directly ke popup (main-thread only — called
+    # from _start_download + _drain_queue dl_done/dl_error handlers, semuanya
+    # main thread). Worker thread (_dl_worker) pakai ui_queue.put(('dl_log',
+    # line)) -> _drain_queue routes ke popup.append (handler dl_log).
     def _dl_log_line(self, line):
-        self.dl_text.configure(state="normal")
-        self.dl_text.insert("end", line + "\n")
-        self.dl_text.see("end")
-        self.dl_text.configure(state="disabled")
+        """Append line to DL log popup (main-thread only — direct append)."""
+        self._ensure_dl_logwin().append(line)
 
     def _dl_clear(self):
-        self.dl_text.configure(state="normal")
-        self.dl_text.delete("1.0", "end")
-        self.dl_text.configure(state="disabled")
+        self._ensure_dl_logwin().clear()
 
     # ================= DOWNLOAD SJ GIS (v4.11) =================
     def _sj_detect_script(self):
@@ -1213,12 +1303,12 @@ class AutoImportApp(tk.Tk):
             messagebox.showwarning(APP_TITLE, f"Tidak bisa membuka folder unduhan:\n{e}", parent=self)
 
     def _sj_clear(self):
-        self.sj_text.configure(state="normal")
-        self.sj_text.delete("1.0", "end")
-        self.sj_text.configure(state="disabled")
+        # v5.0: clear popup log window (replaces sj_text inline Text deletion).
+        self._ensure_sj_logwin().clear()
 
     def _sj_log_line(self, line):
-        """Append a line to the SJ log Text widget (thread-safe via ui_queue)."""
+        """Append a line to the SJ log popup (thread-safe via ui_queue ->
+        _drain_queue sj_log handler -> popup.append)."""
         self.ui_queue.put(("sj_log", line))
 
     def _sj_count_kodes(self, event=None):
@@ -1341,6 +1431,9 @@ class AutoImportApp(tk.Tk):
         # v4.13: clear previous failed list (a new run replaces last run's
         # failures; populated again when worker parses SJ_RESULT_FAIL marker).
         self._sj_set_failed_kodes([])
+        # v5.0: auto-open popup log window + clear (replace inline sj_text).
+        self._ensure_sj_logwin().clear()
+        self._ensure_sj_logwin().show()
         self._sj_log_line(f"===== Mulai Download SJ GIS: {len(self.sj_kodes)} kode =====")
         for k in self.sj_kodes:
             self._sj_log_line(f"  - {k}")
@@ -1546,33 +1639,33 @@ class AutoImportApp(tk.Tk):
             pass
 
     def _ss_clear(self):
-        self.ss_text.configure(state="normal")
-        self.ss_text.delete("1.0", "end")
-        self.ss_text.configure(state="disabled")
+        # v5.0: clear popup log window (replaces ss_text inline Text deletion).
+        self._ensure_ss_logwin().clear()
 
     def _ss_log_line(self, line):
-        """Append a line to the SS log Text widget (thread-safe via ui_queue)."""
+        """Append a line to the SS log popup (thread-safe via ui_queue ->
+        _drain_queue ss_log handler -> popup.append)."""
         self.ui_queue.put(("ss_log", line))
 
     def _ss_test_log(self):
-        """Test button: push 8 dummy lines to verify the SS log widget works.
+        """Test: push 8 dummy lines to verify the SS log popup works.
 
-        Diagnostic aid (v4.17): if clicking 'Test Log' makes lines appear in
-        the log area, then ss_text widget + _drain_queue are working -- any
-        missing output during a real run is in the subprocess (app.py --cli)
-        or _ss_worker. If clicking 'Test Log' shows NOTHING, the problem is
-        in the widget itself or _drain_queue. Uses the same _ss_log_line ->
-        ui_queue -> _drain_queue path as real subprocess output, so it
-        exercises the exact same plumbing.
+        v5.0: 'Test Log' button dihapus dari UI (sebelumnya di Card 3 log
+        button row). Method ini dipertahankan utk diagnostic manual (call via
+        console/script). Routes directly ke popup (bukan via ui_queue) utk
+        immediate feedback. show()+clear() utk mulai fresh.
         """
-        self._ss_log_line("===== TEST LOG: verifikasi widget log =====")
+        win = self._ensure_ss_logwin()
+        win.show()
+        win.clear()
+        win.append("===== TEST LOG: verifikasi widget log =====")
         for i in range(1, 6):
-            self._ss_log_line(
+            win.append(
                 f"[TEST {i}/5] Log widget test line - jika ini keliatan, log jalan.")
-        self._ss_log_line(
+        win.append(
             "[TEST] Jika 6 baris di atas keliatan, masalahnya di subprocess (app.py --cli).")
-        self._ss_log_line(
-            "[TEST] Kalau nggak keliatan, masalahnya di ss_text widget atau _drain_queue.")
+        win.append(
+            "[TEST] Kalau nggak keliatan, masalahnya di ss_logwin popup atau _drain_queue.")
 
     def _ss_restos_wheel(self, e):
         steps = _wheel_steps(e)
@@ -1582,13 +1675,9 @@ class AutoImportApp(tk.Tk):
             except Exception:
                 pass
 
-    def _ss_text_wheel(self, e):
-        steps = _wheel_steps(e)
-        if steps:
-            try:
-                self.ss_text.yview_scroll(steps, "units")
-            except Exception:
-                pass
+    # v5.0: _ss_text_wheel DIHAPUS — scrolled ss_text inline log widget yang
+    # sudah dihapus (Card 3 removed). Wheel scroll utk popup Text widget
+    # sudah ditangani oleh lambda binding di SimpleLogPopup.__init__.
 
     def _start_ss(self):
         """Validate form + save config + launch `app.py --cli` subprocess."""
@@ -1624,6 +1713,9 @@ class AutoImportApp(tk.Tk):
         self.ss_counter_lbl.configure(text="0 / 0")
         self.ss_status_lbl.configure(
             text=f"Berjalan — {len(restos)} resto × pages {self.ss_pages_var.get()}")
+        # v5.0: auto-open popup log window + clear (replace inline ss_text).
+        self._ensure_ss_logwin().clear()
+        self._ensure_ss_logwin().show()
         self._ss_log_line(
             f"===== Mulai Screen Shot Power BI: pages={self.ss_pages_var.get()} "
             f"| resto={len(restos)} =====")
@@ -1746,6 +1838,9 @@ class AutoImportApp(tk.Tk):
         self.dl_counter_lbl.configure(text="0 / 0")
         urutan = " -> ".join(s[1] for s in stages)
         self.dl_status_lbl.configure(text=f"Berjalan ({urutan}) — cabang: {self.dl_branches}")
+        # v5.0: auto-open popup log window + clear (replace inline dl_text).
+        self._ensure_dl_logwin().clear()
+        self._ensure_dl_logwin().show()
         self._dl_log_line(f"===== Pipeline: {urutan} | Cabang: {self.dl_branches} =====")
         threading.Thread(target=self._dl_worker, args=(stages,), daemon=True).start()
 
@@ -1857,6 +1952,35 @@ class AutoImportApp(tk.Tk):
 
     def _show_logwin(self):
         self._ensure_logwin().show()
+
+    # v5.0: popup log windows untuk DL, SJ, SS tabs. Lazy-init pattern sama
+    # seperti _ensure_logwin (Otomasi tab, ProcessLogWindow). Hidden by default
+    # (withdraw in __init__), shown via _show_*_logwin (button click) atau
+    # auto-open di _start_download/_start_sj_download/_start_ss. Reusable
+    # (withdraw on close, deiconify on show — NOT destroyed).
+    def _ensure_dl_logwin(self):
+        if self.dl_logwin is None or not self.dl_logwin.winfo_exists():
+            self.dl_logwin = SimpleLogPopup(self, "Log Download Draft IA")
+        return self.dl_logwin
+
+    def _ensure_sj_logwin(self):
+        if self.sj_logwin is None or not self.sj_logwin.winfo_exists():
+            self.sj_logwin = SimpleLogPopup(self, "Log Download SJ GIS")
+        return self.sj_logwin
+
+    def _ensure_ss_logwin(self):
+        if self.ss_logwin is None or not self.ss_logwin.winfo_exists():
+            self.ss_logwin = SimpleLogPopup(self, "Log Screen Shot Power BI")
+        return self.ss_logwin
+
+    def _show_dl_logwin(self):
+        self._ensure_dl_logwin().show()
+
+    def _show_sj_logwin(self):
+        self._ensure_sj_logwin().show()
+
+    def _show_ss_logwin(self):
+        self._ensure_ss_logwin().show()
 
     def log(self, message, kind="INFO"):
         stamp = datetime.now().strftime("%H:%M:%S")
@@ -1977,7 +2101,9 @@ class AutoImportApp(tk.Tk):
                         self.logwin.set_step("TERJADI ERROR — lihat detail di log", "#f87171")
                     messagebox.showerror(APP_TITLE, item[1], parent=self)
                 elif a == "dl_log":
-                    self._dl_log_line(item[1])
+                    # v5.0: route ke popup log window (replaces inline dl_text
+                    # which was 0px invisible).
+                    self._ensure_dl_logwin().append(item[1])
                 elif a == "dl_progress":
                     self.dl_progress["maximum"] = max(item[2], 1)
                     self.dl_progress["value"] = item[1]
@@ -1991,23 +2117,22 @@ class AutoImportApp(tk.Tk):
                     self.dl_stop_btn.configure(state="disabled")
                     self.dl_skip_cb.configure(state="normal")
                     self._detect_dl_folder_state_only()
-                    self.dl_status_lbl.configure(text=f"Selesai (kode {code}) — OK {succ}, GAGAL {fail}.")
-                    self._dl_log_line(f"===== SELESAI (kode {code}) — OK {succ}, GAGAL {fail} =====")
+                    self.dl_status_lbl.configure(text=f"Selesai (kode {code}) — OK {succ}, GAGAL {fail}. Lihat log popup utk detail.")
+                    # v5.0: append 'Selesai' ke popup (replaces inline dl_text).
+                    self._ensure_dl_logwin().append(f"===== SELESAI (kode {code}) — OK {succ}, GAGAL {fail} =====")
                 elif a == "dl_error":
                     self.dl_running = False
                     self.dl_start_btn.configure(state="normal")
                     self.dl_stop_btn.configure(state="disabled")
                     self.dl_skip_cb.configure(state="normal")
                     self._detect_dl_folder_state_only()
-                    self.dl_status_lbl.configure(text="Gagal. Lihat log.")
-                    self._dl_log_line(f"!!!!! {item[1]}")
+                    self.dl_status_lbl.configure(text="Gagal. Lihat log popup.")
+                    # v5.0: append error ke popup (replaces inline dl_text).
+                    self._ensure_dl_logwin().append(f"!!!!! {item[1]}")
                 # ---- Download SJ GIS (v4.11) ----
                 elif a == "sj_log":
-                    msg = item[1]
-                    self.sj_text.configure(state="normal")
-                    self.sj_text.insert("end", msg + "\n")
-                    self.sj_text.see("end")
-                    self.sj_text.configure(state="disabled")
+                    # v5.0: route ke popup log window (replaces inline sj_text).
+                    self._ensure_sj_logwin().append(item[1])
                 elif a == "sj_progress":
                     cur, tot = item[1]
                     self.sj_progress["maximum"] = max(tot, 1)
@@ -2031,18 +2156,13 @@ class AutoImportApp(tk.Tk):
                     self.sj_start_btn.configure(state="normal")
                     self.sj_stop_btn.configure(state="disabled")
                     self.sj_progress["value"] = total if total else 0
-                    self.sj_status_lbl.configure(text="Selesai — lihat log untuk detail")
-                    self.sj_text.configure(state="normal")
-                    self.sj_text.insert("end", "===== Selesai =====\n")
-                    self.sj_text.see("end")
-                    self.sj_text.configure(state="disabled")
+                    self.sj_status_lbl.configure(text="Selesai — lihat log popup untuk detail")
+                    # v5.0: append 'Selesai' ke popup (replaces inline sj_text).
+                    self._ensure_sj_logwin().append("===== Selesai =====")
                 # ---- Screen Shot Power BI (v4.14) ----
                 elif a == "ss_log":
-                    msg = item[1]
-                    self.ss_text.configure(state="normal")
-                    self.ss_text.insert("end", msg + "\n")
-                    self.ss_text.see("end")
-                    self.ss_text.configure(state="disabled")
+                    # v5.0: route ke popup log window (replaces inline ss_text).
+                    self._ensure_ss_logwin().append(item[1])
                 elif a == "ss_progress":
                     cur, tot, label = item[1]
                     self.ss_progress["maximum"] = max(tot, 1)
@@ -2056,13 +2176,17 @@ class AutoImportApp(tk.Tk):
                     self.ss_stop_btn.configure(state="disabled")
                     if success is not None:
                         self.ss_status_lbl.configure(
-                            text=f"Selesai — {success} berhasil, {failed} gagal")
-                        self._ss_log_line(
+                            text=f"Selesai — {success} berhasil, {failed} gagal. Lihat log popup.")
+                        # v5.0: append 'Selesai' ke popup (replaces inline ss_text).
+                        self._ensure_ss_logwin().append(
                             f"===== Selesai: {success} berhasil, {failed} gagal =====")
                     else:
                         # No DONE marker seen (subprocess terminated early or
                         # crashed without emitting DONE). Show 'Dihentikan'.
                         self.ss_status_lbl.configure(text="Dihentikan")
+                        # v5.0: surface di popup juga (supaya user tau kenapa
+                        # ga ada 'Selesai' line).
+                        self._ensure_ss_logwin().append("===== Dihentikan =====")
         except queue.Empty:
             pass
         self.after(100, self._drain_queue)
@@ -2099,6 +2223,15 @@ class AutoImportApp(tk.Tk):
                 self.ss_proc.terminate()
         except Exception:
             pass
+        # v5.0: destroy popup log windows (DL, SJ, SS). Reusable popups withdraw
+        # on hide() — but on app close, destroy them so tidak ada dangling
+        # Toplevel references after main Tk window destroyed.
+        for win in (self.dl_logwin, self.sj_logwin, self.ss_logwin):
+            try:
+                if win is not None and win.winfo_exists():
+                    win.destroy()
+            except Exception:
+                pass
         self.destroy()
 
     # ================= OTOMASI IMPORT =================
@@ -2227,6 +2360,6 @@ class AutoImportApp(tk.Tk):
 
 
 if __name__ == "__main__":
-    print(f"=== {APP_TITLE} — ui_app.py v4.19 (pasangan accurate_bot.py v4.7) ===")
+    print(f"=== {APP_TITLE} — ui_app.py v5.0 (pasangan accurate_bot.py v4.7) ===")
     app = AutoImportApp()
     app.mainloop()
