@@ -139,7 +139,7 @@ from selenium.webdriver.chrome.options import Options
 # dari main.py lama). Kalau import/version gagal -> messagebox dialog (bukan traceback).
 try:
     import accurate_bot as bot
-    REQUIRED_BOT_VERSION = "4.7"
+    REQUIRED_BOT_VERSION = "4.8"
     if getattr(bot, "BOT_VERSION", None) != REQUIRED_BOT_VERSION:
         raise RuntimeError(
             "Versi file TIDAK SEPASANG.\n\n"
