@@ -262,7 +262,6 @@ from datetime import datetime
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import (
@@ -446,33 +445,6 @@ return (function(kode){
   }
   return {found:false, count:rows.length};
 })(arguments[0]);
-"""
-
-JS_FIND_MARK = JS_VIS + """
-return (function(txt, exact){
-  const ATTR='data-fl-target';
-  const up = txt.toUpperCase();
-  function scan(doc, path){
-    const els = doc.querySelectorAll('button, a, span, div, li, label, input[type="button"], i, svg');
-    for (const el of els){
-      if (!vis(el)) continue;
-      const t = (el.innerText||el.textContent||'').trim();
-      const ti = (el.getAttribute && (el.getAttribute('title')||'')) || '';
-      const ok = exact ? (t.toUpperCase()===up)
-                       : ((t && t.toUpperCase().includes(up) && t.length<60) || (ti && ti.toUpperCase().includes(up)));
-      if (ok){
-        el.setAttribute(ATTR,'1');
-        return {path:path, text:t.slice(0,60), html:(el.outerHTML||'').slice(0,400)};
-      }
-    }
-    const fr = doc.querySelectorAll('iframe, frame');
-    for (let i=0;i<fr.length;i++){
-      try{ const d=fr[i].contentDocument; if(!d) continue; const r=scan(d, path.concat([i])); if(r) return r; }catch(e){}
-    }
-    return null;
-  }
-  return scan(document, []);
-})(arguments[0], arguments[1])
 """
 
 JS_DETAIL_OPEN = JS_VIS + """
@@ -868,88 +840,6 @@ def click_first_dropdown_item(driver, timeout=8):
 #   - step 4.5 (after click_first_dropdown_item) — apakah dropdown <a> click
 #     benar2 buka attachment panel? Panel ada + visible?
 # Dari dump ini, fix selector v8.6 ditulis berdasar data nyata (bukan tebakan).
-JS_DUMP_DROPDOWN_STATE = JS_VIS + """
-return (function(){
-  var out = {label: arguments[0] || '', url: location.href.slice(0,100), dropLefts: []};
-  var uls = document.querySelectorAll('ul.drop-left, ul[class*="drop-left"]');
-  for (var i=0;i<uls.length && out.dropLefts.length<10;i++){
-    var ul = uls[i];
-    var st = window.getComputedStyle(ul);
-    var vis = !(st.display==='none'||st.visibility==='hidden'||parseFloat(st.opacity)===0);
-    var r = ul.getBoundingClientRect();
-    var sizeOk = r.width>0 && r.height>0;
-    var parent = ul.parentElement;
-    var items = [];
-    var links = ul.querySelectorAll('a, li > a, li');
-    for (var j=0;j<links.length && items.length<8;j++){
-      var a = links[j];
-      var ast = window.getComputedStyle(a);
-      var avis = !(ast.display==='none'||ast.visibility==='hidden'||parseFloat(ast.opacity)===0);
-      var ar = a.getBoundingClientRect();
-      var asizeOk = ar.width>0 && ar.height>0;
-      items.push({
-        tag: a.tagName,
-        text: (a.innerText||a.textContent||'').trim().slice(0,40),
-        href: (a.getAttribute&&a.getAttribute('href')||'').slice(0,60),
-        onclick: (a.getAttribute&&a.getAttribute('onclick')||'').slice(0,60),
-        visible: avis && asizeOk,
-        opacity: parseFloat(ast.opacity)
-      });
-    }
-    out.dropLefts.push({
-      idx: i,
-      visible: vis && sizeOk,
-      opacity: parseFloat(st.opacity),
-      display: st.display,
-      parentTag: parent?parent.tagName:'',
-      parentClass: parent?(parent.className||'').toString().slice(0,60):'',
-      parentId: parent?(parent.id||''):'',
-      itemCount: items.length,
-      items: items
-    });
-  }
-  // also check attachment panel existence
-  out.attachmentPanels = [];
-  var aps = document.querySelectorAll("div[id^='accurate__company__attachment']");
-  for (var k=0;k<aps.length && out.attachmentPanels.length<5;k++){
-    var p = aps[k];
-    var pst = window.getComputedStyle(p);
-    out.attachmentPanels.push({
-      id: p.id,
-      visible: !(pst.display==='none'||pst.visibility==='hidden'||parseFloat(pst.opacity)===0),
-      hasDownloadIcon: !!p.querySelector('i.icon-download-2, i[class*="icon-download"]')
-    });
-  }
-  return out;
-})(arguments[0]);
-"""
-
-def dump_dropdown_state(driver, label):
-    """Diagnostic dump: ALL ul.drop-left + items + attachment panels. For v8.5 diagnosis."""
-    switch_top(driver)
-    try:
-        st = driver.execute_script(JS_DUMP_DROPDOWN_STATE, label)
-    except Exception as e:
-        say(f"  [DUMP ERR] {e}"); return
-    say(f"\n  ===== DUMP: {label} =====")
-    say(f"  URL: {st.get('url','?')[:80]}")
-    dls = st.get('dropLefts', [])
-    say(f"  ul.drop-left total: {len(dls)}")
-    for dl in dls:
-        say(f"    [{dl['idx']}] visible={dl['visible']} opacity={dl.get('opacity','?')} display={dl.get('display','?')[:15]}")
-        say(f"        parent: <{dl['parentTag']}> id='{dl['parentId']}' class='{dl['parentClass']}'")
-        say(f"        items ({dl['itemCount']}):")
-        for it in dl.get('items', []):
-            say(f"          [{it['tag']}] text='{it['text']}' href='{it['href'][:30]}' visible={it['visible']} opacity={it.get('opacity','?')}")
-    aps = st.get('attachmentPanels', [])
-    if aps:
-        say(f"  Attachment panels: {len(aps)}")
-        for ap in aps:
-            say(f"    id='{ap['id']}' visible={ap['visible']} hasDownloadIcon={ap['hasDownloadIcon']}")
-    else:
-        say(f"  Attachment panels: 0 (none)")
-    say(f"  ===== END DUMP =====\n")
-
 # ============================================================
 # STEP 5: WAIT ATTACHMENT PANEL + CLICK icon-download-2
 # ============================================================
@@ -1038,31 +928,6 @@ def close_attachment_overlay(driver, timeout=5):
         except: pass
         time.sleep(0.4)
     return False
-
-def verify_still_on_detail(driver, kode):
-    """Safety check: pastikan nggak ke-navigation ke Dashboard/halaman lain setelah klik dropdown.
-    Return True kalau masih di halaman detail item-transfer."""
-    try:
-        switch_top(driver)
-        url = (driver.current_url or "").lower()
-        # Kalau URL jadi dashboard & bukan item-transfer → navigated away
-        if "dashboard" in url and "item-transfer" not in url:
-            say(f"      [SAFETY] Navigasi ke Dashboard terdeteksi! Abort.")
-            return False
-        # Cek btnCommentAttachment masih ada (marker detail form)
-        btns = driver.find_elements(By.ID, "btnCommentAttachment")
-        if btns:
-            return True
-        # Cek tab detail masih ada (berisi kode)
-        tabs = driver.find_elements(By.CSS_SELECTOR, "div.module-tab, div.form-tab-title")
-        for t in tabs:
-            try:
-                if kode in (t.text or ""):
-                    return True
-            except: continue
-        return False
-    except:
-        return False
 
 def close_detail_tab(driver, kode, timeout=10):
     """Tutup tab detail (klik X i.icon-cancel-2.smaller di tab berisi kode).

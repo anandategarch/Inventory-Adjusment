@@ -439,12 +439,6 @@ class SimpleLogPopup(tk.Toplevel):
         except Exception:
             pass
 
-    def is_visible(self):
-        try:
-            return self.winfo_exists() and self.winfo_ismapped()
-        except Exception:
-            return False
-
 
 class AutoImportApp(tk.Tk):
     def __init__(self):

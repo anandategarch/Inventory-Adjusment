@@ -419,87 +419,6 @@ class Engine:
         except Exception:
             pass
 
-    def _get_selected_resto_rows_open(self, page, dd, inp=None):
-        anchor_x = (inp['x'] if inp else dd['x'])
-        anchor_bottom = (inp['bottom'] if inp else dd['y'] + 35)
-        return page.evaluate("""
-        (payload) => {
-          const anchorX = payload.anchorX;
-          const anchorBottom = payload.anchorBottom;
-          const viewportH = window.innerHeight || 900;
-          const out=[];
-          const seen = new Set();
-
-          function own(el){
-            return Array.from(el.childNodes)
-              .filter(n=>n.nodeType===3)
-              .map(n=>(n.textContent||'').trim())
-              .filter(Boolean)
-              .join(' ')
-              .replace(/\\s+/g,' ')
-              .trim();
-          }
-          function txt(el){
-            return own(el) || (el.textContent||'')
-              .replace(/\\s+/g,' ')
-              .trim();
-          }
-          function isNoise(t){
-            return !t || t.length>160 || /^(select all|all|search)$/i.test(t);
-          }
-
-          const selectedEls = document.querySelectorAll(
-            '[aria-checked="true"],[aria-selected="true"],[aria-pressed="true"]'
-          );
-
-          for(const el of selectedEls){
-            const er = el.getBoundingClientRect();
-            if(er.width < 6 || er.height < 6) continue;
-            if(er.top <= anchorBottom + 2 || er.top > viewportH - 5) continue;
-            if(Math.abs((er.left+er.width/2)-anchorX) > 320) continue;
-
-            let best = null;
-            let n = el;
-            for(let i=0; i<9 && n; i++, n=n.parentElement){
-              const r = n.getBoundingClientRect();
-              const t = txt(n);
-              const role = (n.getAttribute('role')||'').toLowerCase();
-              if(isNoise(t)) continue;
-              if(r.width < 80 || r.height < 16 || r.height > 95) continue;
-              if(r.top <= anchorBottom + 2 || r.top > viewportH - 5) continue;
-              if(Math.abs((r.left+r.width/2)-anchorX) > 360) continue;
-
-              const looksLikeRow =
-                role==='option' || role==='listitem' ||
-                n.hasAttribute('aria-checked') || n.hasAttribute('aria-selected') ||
-                n.hasAttribute('aria-pressed') ||
-                !!n.querySelector('[aria-checked],[aria-selected],[aria-pressed]');
-
-              if(looksLikeRow){
-                best = {el:n, r, t};
-                break;
-              }
-            }
-            if(!best) continue;
-
-            const text = best.t;
-            const key = text.toLowerCase();
-            if(seen.has(key)) continue;
-            seen.add(key);
-            out.push({
-              x: best.r.left + best.r.width/2,
-              y: best.r.top + best.r.height/2,
-              text,
-              left:best.r.left, top:best.r.top,
-              width:best.r.width, height:best.r.height
-            });
-          }
-
-          out.sort((a,b)=>a.top-b.top || a.left-b.left);
-          return out;
-        }
-        """, {'anchorX':anchor_x,'anchorBottom':anchor_bottom}) or []
-
     def _get_resto_display(self, page):
         dd, _, method = self.find_resto_dropdown(page)
         if not dd:
@@ -1039,25 +958,6 @@ class Engine:
           return candidates.length ? candidates[0] : null;
         }
         """, {'value':value,'targetX':target_x,'targetY':target_y,'exact':exact})
-
-    def _is_resto_selected_value(self, page, value):
-        dd, inp, _ = self._open_resto_slicer(page)
-        if not dd:
-            return False, False, 'Dropdown Resto tidak ditemukan.'
-        self._clear_resto_search(page, inp)
-        inp=self._find_resto_search_input(page, dd['x'])
-        if inp:
-            page.mouse.click(inp['x'], inp['y'])
-            page.keyboard.press('Control+A')
-            page.keyboard.press('Backspace')
-            page.keyboard.type(value, delay=45)    # V14: 50 -> V15: 45
-            page.wait_for_timeout(600)             # V14: 900 -> V15: 600
-        row=self._find_resto_row(page, value, dd['x'], dd['y'])
-        page.keyboard.press('Escape')
-        page.wait_for_timeout(int(CONFIG.get('wait_escape_ms', 350)))
-        if not row:
-            return False, False, f'Item "{value}" tidak ditemukan saat verifikasi.'
-        return True, bool(row.get('selected')), row.get('text','')
 
     def verify_single_resto(self, page, expected_value):
         """Verify the CLOSED Resto slicer display equals the target exactly."""
