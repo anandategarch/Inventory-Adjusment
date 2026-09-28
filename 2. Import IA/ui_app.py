@@ -1,11 +1,11 @@
 """
-ui_app.py — tampilan aplikasi Import IA (v4.15, pasangan accurate_bot.py v4.7).
+ui_app.py — tampilan aplikasi Import IA (v4.16, pasangan accurate_bot.py v4.7).
 Tab: Otomasi | Database COA & Keterangan | Download Draft IA | Download SJ GIS | Screen Shot Power BI.
 v4.14: tab kelima "Screen Shot Power BI" — menjalankan app.py (folder
 '4. Screen Shot Power BI') sebagai subprocess `app.py --cli`. 3 cards:
 (1) Konfigurasi: Power BI URL + Pages + Output folder + Format (PNG/PDF);
-(2) Resto & Opsi: Text multi-utk daftar resto + 6 V16 checkboxes (sequential
-nav / smart transition / reuse screenshot / merge stability / light recovery /
+(2) Resto & Opsi: Text multi-utk daftar resto + 5 V16 checkboxes (sequential
+nav / reuse screenshot / merge stability / light recovery /
 force-click Next Page) + tombol Mulai / Hentikan / Buka Output + progressbar
 + status label; (3) Log terminal-style + scrollbar + Bersihkan. UI baca +
 tulis config.json di folder 4 (sumber kebenaran). _ss_worker menjalankan
@@ -844,7 +844,6 @@ class AutoImportApp(tk.Tk):
         ss_opt = ttk.LabelFrame(ss_ctl_card, text="V16 Optimizations", padding=8)
         ss_opt.grid(row=3, column=0, sticky="ew", padx=14, pady=(0, 6))
         self.ss_opt_sequential = tk.BooleanVar(value=True)
-        self.ss_opt_smart = tk.BooleanVar(value=False)
         self.ss_opt_reuse = tk.BooleanVar(value=True)
         self.ss_opt_merge = tk.BooleanVar(value=True)
         self.ss_opt_light = tk.BooleanVar(value=True)
@@ -860,9 +859,7 @@ class AutoImportApp(tk.Tk):
         ttk.Checkbutton(ss_row2, text="Light recovery (clear, no reload)",
                        variable=self.ss_opt_light).pack(side="left", padx=(0, 12))
         ttk.Checkbutton(ss_row2, text="Force-click Next Page fallback",
-                       variable=self.ss_opt_force).pack(side="left", padx=(0, 12))
-        ttk.Checkbutton(ss_row2, text="Smart resto transition (experimental)",
-                       variable=self.ss_opt_smart).pack(side="left")
+                       variable=self.ss_opt_force).pack(side="left")
 
         # Run/Stop buttons
         ss_run_btns = tk.Frame(ss_ctl_card, bg=C_CARD)
@@ -1426,7 +1423,6 @@ class AutoImportApp(tk.Tk):
         self.ss_restos_text.delete("1.0", "end")
         self.ss_restos_text.insert("1.0", cfg.get("restos", "4217\nDPKLIM\nMTR\nBSD"))
         self.ss_opt_sequential.set(bool(cfg.get("opt_sequential_page_nav", True)))
-        self.ss_opt_smart.set(bool(cfg.get("opt_smart_resto_transition", False)))
         self.ss_opt_reuse.set(bool(cfg.get("opt_reuse_stable_screenshot", True)))
         self.ss_opt_merge.set(bool(cfg.get("opt_merge_final_stability", True)))
         self.ss_opt_light.set(bool(cfg.get("opt_light_recovery", True)))
@@ -1451,7 +1447,6 @@ class AutoImportApp(tk.Tk):
         cfg["output_format"] = self.ss_format_var.get().strip().upper()
         cfg["restos"] = self.ss_restos_text.get("1.0", "end").strip()
         cfg["opt_sequential_page_nav"] = bool(self.ss_opt_sequential.get())
-        cfg["opt_smart_resto_transition"] = bool(self.ss_opt_smart.get())
         cfg["opt_reuse_stable_screenshot"] = bool(self.ss_opt_reuse.get())
         cfg["opt_merge_final_stability"] = bool(self.ss_opt_merge.get())
         cfg["opt_light_recovery"] = bool(self.ss_opt_light.get())
@@ -1584,7 +1579,9 @@ class AutoImportApp(tk.Tk):
           'DONE: success=<N> failed=<N>'    -> ('ss_done', (success, failed))
           any other line                    -> ('ss_log', line)
         """
-        env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
+        # Track whether app.py emitted a DONE marker so we can detect crashes.
+        self._ss_done_seen = False
         try:
             proc = subprocess.Popen(
                 [sys.executable, self.ss_script_path, "--cli"],
@@ -1601,8 +1598,6 @@ class AutoImportApp(tk.Tk):
         self.ss_proc = proc
         for line in proc.stdout:
             line = line.rstrip("\r\n")
-            if not line:
-                continue
             self.ui_queue.put(("ss_log", line))
             if line.startswith("PROGRESS:"):
                 m = re.search(r"PROGRESS:\s*(\d+)/(\d+)\s*(.*)", line)
@@ -1616,6 +1611,7 @@ class AutoImportApp(tk.Tk):
                 if m:
                     success = int(m.group(1))
                     failed = int(m.group(2))
+                    self._ss_done_seen = True
                     self.ui_queue.put(("ss_done", (success, failed)))
             # Check stop between lines (best-effort; subprocess terminate
             # is the real stop mechanism in _stop_ss).
@@ -1626,6 +1622,11 @@ class AutoImportApp(tk.Tk):
                     pass
                 break
         proc.wait()
+        exit_code = proc.returncode
+        # If process crashed (non-zero exit) and no DONE marker was seen,
+        # surface the failure in the log so the user sees the traceback.
+        if exit_code != 0 and not self._ss_done_seen:
+            self.ui_queue.put(("ss_log", f"[ERROR] app.py exited with code {exit_code}. Lihat log di atas untuk traceback."))
         # Always emit a final ss_done (None, None) if no DONE marker was seen,
         # so the UI re-enables the Start button.
         self.ui_queue.put(("ss_done", (None, None)))
@@ -2151,6 +2152,6 @@ class AutoImportApp(tk.Tk):
 
 
 if __name__ == "__main__":
-    print(f"=== {APP_TITLE} — ui_app.py v4.15 (pasangan accurate_bot.py v4.7) ===")
+    print(f"=== {APP_TITLE} — ui_app.py v4.16 (pasangan accurate_bot.py v4.7) ===")
     app = AutoImportApp()
     app.mainloop()
