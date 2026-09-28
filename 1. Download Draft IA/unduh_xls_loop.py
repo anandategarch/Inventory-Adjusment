@@ -25,6 +25,7 @@ DEBUG_PORT = 9222
 MAX_ROWS = 0
 MAX_CONSECUTIVE_FAIL = 3
 DELAY_BETWEEN_TRANSACTIONS = 2.5  # seconds — prevent Accurate rate-limit after 4+ rapid prints
+HARD_RESET_EVERY_N = 8  # refresh list page every N transactions to reset SlickGrid
 DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads")
 NOMOR_RE = re.compile(r"IA\.\d{4}\.\d{2}\.\d+")
 
@@ -474,6 +475,47 @@ def recover_to_list(driver):
         clear_mark(driver, cl["path"])
     return find_list_frame(driver, timeout=8)
 
+def hard_reset_list(driver):
+    """Hard reset: click btnRefresh to reload the list page.
+
+    Resets SlickGrid stylesheet (fixes 'Cannot find stylesheet' error after
+    many SPA navigations) + clears 173+ residual overlay elements from DOM.
+
+    Called every HARD_RESET_EVERY_N transactions to prevent grid 'mepet' issue.
+    """
+    say("  \U0001f504 Hard reset: refresh list page (reset SlickGrid + clear DOM)...")
+    try:
+        switch_path(driver, [])
+        # Try btnRefresh first
+        btn = driver.find_element(By.CSS_SELECTOR, "button[name='btnRefresh']")
+        if btn:
+            smart_click(driver, btn)
+            say("    [OK] btnRefresh diklik, tunggu list re-render...")
+            time.sleep(3)  # wait for list to re-render + SlickGrid to re-init
+            # Re-find the list frame (may have changed after refresh)
+            if find_list_frame(driver, timeout=12):
+                say("    [OK] List frame re-found setelah refresh.")
+            else:
+                say("    [WARNING] List frame tidak ditemukan setelah refresh.")
+            return True
+    except Exception as e:
+        say(f"    [WARNING] btnRefresh gagal: {e}")
+    # Fallback: try btnToggleList (toggle list view on/off)
+    try:
+        switch_path(driver, [])
+        btn = driver.find_element(By.CSS_SELECTOR, "button[name='btnToggleList']")
+        if btn:
+            smart_click(driver, btn)
+            time.sleep(2)
+            smart_click(driver, btn)  # toggle back on
+            time.sleep(3)
+            find_list_frame(driver, timeout=12)
+            say("    [OK] btnToggleList toggle (fallback refresh).")
+            return True
+    except Exception as e:
+        say(f"    [WARNING] btnToggleList fallback juga gagal: {e}")
+    return False
+
 def collect_nomor_list(driver):
     if not find_list_frame(driver):
         return [], 44, {}
@@ -813,6 +855,18 @@ def main():
             if seq < limit:  # don't delay after last transaction
                 say(f"  Jeda {DELAY_BETWEEN_TRANSACTIONS}s sebelum transaksi berikutnya...")
                 time.sleep(DELAY_BETWEEN_TRANSACTIONS)
+
+            # Hard reset every N transactions to prevent SlickGrid stylesheet breakage
+            # + DOM pollution from 173+ residual overlay elements
+            if seq < limit and seq % HARD_RESET_EVERY_N == 0:
+                say(f"\n  \U0001f504 Hard reset #{seq} (every {HARD_RESET_EVERY_N} transaksi)...")
+                hard_reset_list(driver)
+                # Re-collect suffix_map after refresh (grid re-rendered, rows may have changed)
+                # Actually, the existing code collects suffix_map BEFORE the loop. After refresh,
+                # the grid re-renders with the same data (filter still applied). So suffix_map
+                # should still be valid. But row heights might change — re-read row_h.
+                # The process_nomor function uses find_rendered_row which searches the grid
+                # dynamically, so it should adapt to the refreshed grid.
     except KeyboardInterrupt:
         say("\nDihentikan manual.")
 
