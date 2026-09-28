@@ -25,7 +25,7 @@ DEBUG_PORT = 9222
 MAX_ROWS = 0
 MAX_CONSECUTIVE_FAIL = 3
 DELAY_BETWEEN_TRANSACTIONS = 2.5  # seconds — prevent Accurate rate-limit after 4+ rapid prints
-HARD_RESET_EVERY_N = 8  # refresh list page every N transactions to reset SlickGrid
+HARD_RESET_EVERY_N = 4  # more frequent — E_ROW can happen at #5, #7 (before #8)
 DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads")
 NOMOR_RE = re.compile(r"IA\.\d{4}\.\d{2}\.\d+")
 
@@ -867,6 +867,14 @@ def main():
                 # should still be valid. But row heights might change — re-read row_h.
                 # The process_nomor function uses find_rendered_row which searches the grid
                 # dynamically, so it should adapt to the refreshed grid.
+
+            # Failure recovery: if this transaction FAILED, hard reset before next
+            # (grid might be in bad state from the failed transaction — E_ROW, E_PRINT, etc.)
+            # This works WITH the scheduled reset above: scheduled runs every 4, this runs
+            # only on failure, so worst case = reset after EVERY failure + every 4 on success.
+            if not ok and seq < limit:
+                say(f"  \U0001f504 Recovery reset (transaksi gagal, reset grid sebelum lanjut)...")
+                hard_reset_list(driver)
     except KeyboardInterrupt:
         say("\nDihentikan manual.")
 

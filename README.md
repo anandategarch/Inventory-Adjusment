@@ -79,13 +79,28 @@ Screenshot dashboard Power BI per page × per resto. Pakai Playwright (headless 
 
 ## Chrome Remote Debugging (Tool 1, 3)
 
-Tool 1 (Download Draft IA) dan Tool 3 (Download SJ GIS) butuh Chrome dengan remote debugging:
+Tool 1 (Download Draft IA) dan Tool 3 (Download SJ GIS) butuh Chrome dengan remote debugging.
+
+**PENTING:** Selama tool berjalan, JANGAN:
+- Close Chrome debugging window
+- Navigate away dari halaman Accurate
+- Minimize Chrome (jika tanpa anti-throttle flags)
+
+**Dengan anti-throttle flags (v5.1+):** Chrome debugging window aman di-background
+(switch ke app lain OK). Flags: `--disable-background-timer-throttling`
+`--disable-backgrounding-occluded-windows` `--disable-renderer-backgrounding`
+
 ```
-chrome.exe --remote-debugging-port=9222 --user-data-dir="C:\ChromeDebugProfile" "https://accurate.id"
+chrome.exe --remote-debugging-port=9222 --user-data-dir="C:\ChromeDebugProfile" ^
+  --disable-background-timer-throttling ^
+  --disable-backgrounding-occluded-windows ^
+  --disable-renderer-backgrounding ^
+  "https://accurate.id"
 ```
 Login Accurate sekali di Chrome tersebut (session persist di `C:\ChromeDebugProfile`). Setelah itu, tool auto-attach ke Chrome yang sudah login.
 
-**Tip:** Tab "Download SJ GIS" di UI punya tombol "🌐 Buka Chrome 9222" yang launch Chrome otomatis.
+**Tip:** Tab "Download SJ GIS" di UI punya tombol "Buka Chrome 9222" yang
+launch Chrome otomatis dengan anti-throttle flags.
 
 ## Cara Download & Update
 
@@ -96,6 +111,8 @@ Login Accurate sekali di Chrome tersebut (session persist di `C:\ChromeDebugProf
 
 ## Changelog
 
+- **v5.1** (ui_app.py): Chrome anti-throttle flags di `_sj_launch_chrome` (`--disable-background-timer-throttling`, `--disable-backgrounding-occluded-windows`, `--disable-renderer-backgrounding`). Chrome aman di-background selama tool berjalan. README update "stay on Chrome" guidance.
+- **v7** (unduh_xls_loop.py): `HARD_RESET_EVERY_N` 8→4 (E_ROW bisa terjadi di #5/#7 sebelum reset #8). Failure-triggered hard reset — setiap transaksi gagal (E_ROW, E_PRINT, dll) di-reset grid sebelum lanjut ke transaksi berikutnya.
 - **v4.14** (ui_app.py): 5 tab unified UI (Otomasi + Database + Download Draft IA + Download SJ GIS + Screen Shot Power BI)
 - **v8.13** (download_sj_gis.py): env var support + Kode Gagal retry feature
 - **V16** (app.py): reliability fix + --cli mode for UI subprocess

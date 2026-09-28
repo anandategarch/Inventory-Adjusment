@@ -1,6 +1,13 @@
 """
-ui_app.py — tampilan aplikasi Import IA (v5.0, pasangan accurate_bot.py v4.7).
+ui_app.py — tampilan aplikasi Import IA (v5.1, pasangan accurate_bot.py v4.7).
 Tab: Otomasi | Database COA & Keterangan | Download Draft IA | Download SJ GIS | Screen Shot Power BI.
+v5.1: Chrome anti-throttle flags di _sj_launch_chrome
+  (--disable-background-timer-throttling,
+   --disable-backgrounding-occluded-windows,
+   --disable-renderer-backgrounding) — user boleh switch ke app lain selama
+  tool berjalan tanpa Chrome mem-throttle JS timers / rendering. README di-
+  update dengan guidance "stay on Chrome" + anti-throttle flags.
+
 v5.0: MAJOR REFACTOR — ganti inline log Text widgets (dl_text/sj_text/ss_text)
 yang 0px/invisible (lines di-insert via _drain_queue tapi widget tinggi 0px,
 tak kelihatan — root cause: grid layout gives 0px to log row on sebagian
@@ -1267,6 +1274,9 @@ class AutoImportApp(tk.Tk):
                 chrome_path,
                 "--remote-debugging-port=9222",
                 "--user-data-dir=C:\\ChromeDebugProfile",
+                "--disable-background-timer-throttling",        # JS timers full speed when backgrounded
+                "--disable-backgrounding-occluded-windows",      # don't deprioritize occluded windows
+                "--disable-renderer-backgrounding",              # keep rendering priority high
                 "https://accurate.id",
             ])
             self._sj_log_line("[INFO] Chrome diluncurkan dengan port 9222. Tunggu 3 detik, cek koneksi...")
@@ -1413,9 +1423,13 @@ class AutoImportApp(tk.Tk):
             messagebox.showwarning(
                 APP_TITLE,
                 "Chrome debugging (port 9222) belum aktif.\n"
-                "Buka Chrome dengan:\n"
+                "Klik tombol 'Buka Chrome 9222' (otomatis pakai anti-throttle flags),\n"
+                "atau jalankan manual:\n"
                 "  chrome.exe --remote-debugging-port=9222 "
-                "--user-data-dir=\"C:\\ChromeDebugProfile\"",
+                "--user-data-dir=\"C:\\ChromeDebugProfile\" "
+                "--disable-background-timer-throttling "
+                "--disable-backgrounding-occluded-windows "
+                "--disable-renderer-backgrounding",
                 parent=self)
             return
         # save kodes to settings
@@ -2360,6 +2374,6 @@ class AutoImportApp(tk.Tk):
 
 
 if __name__ == "__main__":
-    print(f"=== {APP_TITLE} — ui_app.py v5.0 (pasangan accurate_bot.py v4.7) ===")
+    print(f"=== {APP_TITLE} — ui_app.py v5.1 (pasangan accurate_bot.py v4.7) ===")
     app = AutoImportApp()
     app.mainloop()
