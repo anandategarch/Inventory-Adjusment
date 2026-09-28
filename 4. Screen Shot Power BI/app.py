@@ -1066,6 +1066,11 @@ class Engine:
         expected = self._normalize_resto_display(expected_value)
         if actual == expected:
             return True, display
+        # V17 fix: Power BI displays resto with code prefix (e.g. "1345.DPKLIM")
+        # but user enters "DPKLIM" (without prefix). Check if expected is contained
+        # in actual (suffix/substring match). This handles the prefix case.
+        if expected and expected in actual:
+            return True, display
         if self._is_no_resto_selection(display):
             return False, f'Tidak ada selection pada slicer Resto; target={expected_value}'
         if self._is_multiple_resto_selection(display):
