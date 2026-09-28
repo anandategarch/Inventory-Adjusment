@@ -1,0 +1,29 @@
+{
+  "app_version": "V16 - Optimized + Reliability Fix",
+  "pages": [
+    19
+  ],
+  "restos": [
+    "DPKLIM"
+  ],
+  "output_format": "PNG",
+  "started_at": "2026-09-28T09:52:45",
+  "ended_at": "2026-09-28T09:54:10",
+  "page_results": {
+    "Page 19 / DPKLIM": {
+      "page": 19,
+      "resto": "DPKLIM",
+      "success": false,
+      "page_error": false,
+      "stage": "RESTO",
+      "message": "Resto \"DPKLIM\" tidak ditemukan atau gagal dipilih/render stabil."
+    }
+  },
+  "summary": {
+    "total_jobs": 1,
+    "success": 0,
+    "failed": 1,
+    "pages_total": 1,
+    "pages_with_error": []
+  }
+}
