@@ -811,7 +811,17 @@ def collect_nomor_list(driver):
     order, seen = [], set()
     suffix_map = {}
     stall, steps = 0, 0
-    for _ in range(300):
+    # SlickGrid uses VIRTUAL scrolling — only renders rows in the viewport (~10).
+    # collect_nomor_list scrolls through + reads rendered rows at each position.
+    # FIX for "40 rows but only 20 found" (grid 40+ rows):
+    #   1. Smaller scroll step (half viewport, not ch-row_h) → 50% overlap between
+    #      reads → no rows skipped even if one read is stale
+    #   2. Longer wait after scroll (0.4s, was 0.2s) → SlickGrid has time to render
+    #      the new virtual rows before JS_RENDERED_ROWS reads them
+    #   3. Higher stall threshold (8, was 3) → more tolerance for slow rendering
+    #   4. Re-read on stall → if first read gets 0 new rows, wait + re-read once
+    #      more before counting as stall (handles temporary render delay)
+    for _ in range(400):
         steps += 1
         rows = driver.execute_script(JS_RENDERED_ROWS) or []
         added = 0
@@ -832,14 +842,30 @@ def collect_nomor_list(driver):
         if vp["st"] + vp["ch"] >= vp["sh"] - 2:
             break
         if added == 0:
+            # Re-read after a short wait — SlickGrid might still be rendering
+            time.sleep(0.35)
+            rows2 = driver.execute_script(JS_RENDERED_ROWS) or []
+            for r in rows2:
+                n = (r.get("nomor") or "").strip()
+                if not n:
+                    continue
+                k = (r.get("ket") or "").strip()
+                if k:
+                    suffix_map[n] = k
+                if n not in seen:
+                    seen.add(n)
+                    order.append(n)
+                    added += 1
+        if added == 0:
             stall += 1
-            if stall >= 3:
+            if stall >= 8:
                 break
         else:
             stall = 0
-        stepv = max(vp["ch"] - row_h, row_h)
+        # Smaller step: half viewport (50% overlap) — ensures no rows skipped
+        stepv = max(vp["ch"] // 2, row_h)
         driver.execute_script(JS_SET_SCROLL, vp["st"] + stepv)
-        time.sleep(0.2)
+        time.sleep(0.4)  # was 0.2 — give SlickGrid time to render virtual rows
 
     driver.execute_script(JS_SET_SCROLL, 0)
     time.sleep(0.3)
