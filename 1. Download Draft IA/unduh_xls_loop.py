@@ -921,42 +921,50 @@ def process_nomor(driver, nomor, seq, limit, row_h, suffix_map):
 
         # ─── PRINT + DOWNLOAD ────────────────────────────────────────────
         # DFT drafts: synthetic Ctrl+P / Cetak-button click don't trigger
-        # Accurate's report handler for drafts (diagnostic confirmed: overlay
-        # appears on MANUAL click only, not on ActionChains or JS-dispatched
-        # events). Semi-manual flow for DFT:
+        # Accurate's report handler for drafts (proven by 2 test runs +
+        # diagnostic: overlay appears on MANUAL click only, not on
+        # ActionChains or JS-dispatched events). BUT the "Unduh XLS" button
+        # INSIDE the overlay accepts synthetic clicks (proven by the console
+        # macro test — JS click on "Unduh XLS" triggered the download).
+        #
+        # So the semi-manual flow for DFT is:
         #   1. Tool opens detail + reads suffix (done above)
-        #   2. User clicks Cetak manually in Accurate → report overlay appears
-        #   3. User runs __dg.dl() console macro → clicks "Unduh XLS" natively
-        #   4. Python polls Downloads folder (180s) → detects new XLS file
-        #   5. Python renames with suffix + closes detail → next transaction
-        # Approved IA (IA.xxxx): fully auto — JS_DISPATCH_CTRL_P + JS_CLICK_SEQ_EL.
+        #   2. Tool prompts user → user clicks Cetak manually (the ONE manual
+        #      step — can't be automated for drafts)
+        #   3. Python polls for "Unduh XLS" overlay to appear (wait_report_overlay
+        #      180s) — overlay appears once user clicked Cetak
+        #   4. Python auto-clicks "Unduh XLS" via smart_click (the button
+        #      accepts synthetic clicks)
+        #   5. Python detects download + renames with suffix + closes → next
+        # NO console paste / __dg.dl() needed — user only clicks Cetak.
+        # Approved IA (IA.xxxx): fully auto — trigger_print_and_wait.
         is_draft = nomor.startswith("DFT.")
 
         if is_draft:
-            say("  → [DFT MANUAL] Klik Cetak di Accurate → jalankan __dg.dl() di console")
-            before = snapshot_downloads()
-            fname = wait_new_download(before, timeout=180)
-            if not fname:
-                raise AppError("E_DOWNLOAD", "file XLS tidak muncul dalam 180s — klik Cetak + __dg.dl()")
-            say_step("Unduh XLS", "OK (manual)")
+            say("  → [DFT MANUAL] Klik Cetak di Accurate (1x). Python auto-klik Unduh XLS...")
+            ux = wait_report_overlay(driver, timeout=180)
+            if not ux:
+                raise AppError("E_PRINT", "overlay tidak muncul dalam 180s — klik Cetak manual di Accurate")
+            say_step("Overlay (manual Cetak)", "OK")
         else:
             ux, method = trigger_print_and_wait(driver)
             if not ux:
                 raise AppError("E_PRINT", "overlay report tidak muncul")
             say_step(f"Cetak ({method})")
 
-            say_step("Unduh XLS")
-            before = snapshot_downloads()
-            el = find_marked(driver, ux["path"])
-            if not el:
-                clear_mark(driver, ux["path"])
-                raise AppError("E_UNDUH", "tombol Unduh XLS hilang")
-            smart_click(driver, el)
+        # Common: click "Unduh XLS" in the overlay → wait for download
+        say_step("Unduh XLS")
+        before = snapshot_downloads()
+        el = find_marked(driver, ux["path"])
+        if not el:
             clear_mark(driver, ux["path"])
+            raise AppError("E_UNDUH", "tombol Unduh XLS hilang")
+        smart_click(driver, el)
+        clear_mark(driver, ux["path"])
 
-            fname = wait_new_download(before, timeout=90)
-            if not fname:
-                raise AppError("E_DOWNLOAD", "file XLS tidak selesai")
+        fname = wait_new_download(before, timeout=90)
+        if not fname:
+            raise AppError("E_DOWNLOAD", "file XLS tidak selesai")
 
         # Common: rename with suffix + close detail + report
         original_path = os.path.join(DOWNLOAD_DIR, fname)
