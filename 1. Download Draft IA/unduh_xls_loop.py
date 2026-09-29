@@ -873,22 +873,10 @@ def trigger_print_and_wait(driver):
             return ux, "tombol Cetak"
 
     # Retry: re-focus + re-dispatch Ctrl+P (last resort). Timeout 8s (was 12s).
-    try:
-        ActionChains(driver).send_keys(Keys.ESCAPE).perform()
-    except Exception:
-        pass
-    settle(0.1)
-    _focus_form(driver)
-    settle(0.1)
-    try:
-        driver.switch_to.default_content()
-        driver.execute_script(JS_DISPATCH_CTRL_P)
-        say_step("Cetak (retry Ctrl+P)", "RETRY")
-        ux = wait_report_overlay(driver, timeout=8)
-        if ux:
-            return ux, "Ctrl+P (retry)"
-    except Exception:
-        pass
+    # NOTE: removed (user request — "kalau gagal gak perlu retry ctrl P"). The
+    # retry Ctrl+P is useless: if attempt 1 (Ctrl+P) already failed, retrying
+    # the same dispatch won't succeed. Saves 8s on the failure path. Worst-case
+    # failure now 18s (was 26s).
 
     return None, None
 
@@ -1052,24 +1040,21 @@ def main():
 
     recover_to_list(driver)
 
-    # v: hard reset before scanning grid — grid might be broken from filter step.
-    # filter_pembuat_data.py navigates the SPA (funnel -> panel -> chip -> Save),
-    # which leaves SlickGrid in a broken state (stylesheet detached / DOM polluted
-    # with 100+ residual overlay elements). collect_nomor_list then scans 0 rows
-    # and the tool aborts with "tidak ada transaksi terbaca di grid". A btnRefresh
-    # here reloads the list page → grid re-renders → scan finds rows properly.
-    say("  Refresh list (reset grid dari filter)...")
-    hard_reset_list(driver)
-    # Re-find list frame after refresh (the refresh may swap the iframe)
-    if not find_list_frame(driver, timeout=12):
-        say("  \u274c Gagal: list frame tidak ditemukan setelah refresh.")
-        return 1
-
+    # Kumpul transaksi langsung (tanpa refresh dulu — hemat ~3s).
+    # User request: "habis filter nama pembuat data gak perlu ada refresh lagi".
+    # Filter scope fix (c3a1bbf) bikin grid lebih stabil, jadi refresh by default
+    # tidak diperlukan. TAPI kalau 0 rows (grid masih rusak dari filter SPA nav),
+    # fallback: hard_reset + re-scan (safety net — tidak re-introduce bug 0 transaksi).
     say_step("Kumpul transaksi + Keterangan")
     order, row_h, suffix_map = collect_nomor_list(driver)
     if not order:
-        say("  \u274c Gagal: tidak ada transaksi terbaca di grid.")
-        return 1
+        # Fallback: grid mungkin rusak dari filter SPA navigation. Refresh + re-scan.
+        say("  ⚠ 0 transaksi terbaca — refresh list (reset grid dari filter)...")
+        hard_reset_list(driver)
+        order, row_h, suffix_map = collect_nomor_list(driver)
+        if not order:
+            say("  \u274c Gagal: tidak ada transaksi terbaca di grid (bahkan setelah refresh).")
+            return 1
     limit = len(order) if MAX_ROWS == 0 else min(MAX_ROWS, len(order))
     say(f"  Transaksi: {len(order)} ditemukan")
     say(f"  Suffix   : {len(suffix_map)} baris terbaca")
