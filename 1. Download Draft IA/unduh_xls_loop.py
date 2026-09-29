@@ -169,16 +169,41 @@ JS_FIND_PRINT = JS_VIS + """
 return (function(){
   const ATTR='data-fl-target';
   function scan(doc, path){
+    // PRIMARY: find the print ICON directly and mark IT (not a container).
+    // The OLD logic matched the first div/span/button that CONTAINED a print
+    // icon as a descendant — which was the OUTER container (e.g. .form-toolbar,
+    // a 65x370 div). Clicking the container dispatches click on the container;
+    // events bubble UP (to parents), NOT DOWN (to children), so the handler
+    // bound on the actual button (.tile.dropdown-toggle, a CHILD of the
+    // container) never fired → overlay never opened (root cause of the DFT
+    // print failure — NOT an isTrusted issue as I previously concluded).
+    // Diagnostic confirmed: Accurate's print button is
+    //   <i id="btnPrint" class="icn-navigation-printer"> inside
+    //   .tile.dropdown-toggle. Marking the ICON and clicking it makes the
+    //   click bubble UP through .tile-content.icon → .tile.dropdown-toggle
+    //   → handler fires → report overlay opens. Same dispatch path as a
+    //   manual click; synthetic (isTrusted=false) works (proven by the
+    //   __dg.dl console macro clicking "Unduh XLS" successfully).
+    const iconSel = '#btnPrint, i[class*="print"], i.icon-print, i[class*="icon-print"], [class*="icon-print"]';
+    const icons = doc.querySelectorAll(iconSel);
+    for (let i = 0; i < icons.length; i++){
+      const icon = icons[i];
+      if (!vis(icon)) continue;
+      icon.setAttribute(ATTR,'1');
+      return {path:path, text:(icon.getAttribute('title')||'print-icon').slice(0,60), html:(icon.outerHTML||'').slice(0,400)};
+    }
+    // FALLBACK: text "CETAK" / class "PRINT" (for pages without a print icon).
+    // Removed the old 'hasPrintIcon && text<20' check — that was the bug (it
+    // matched outer containers). Now only matches elements whose OWN text/title
+    // says CETAK or whose OWN class says PRINT.
     const cands = doc.querySelectorAll('button, a, span, div');
-    for (const el of cands){
+    for (let i = 0; i < cands.length; i++){
+      const el = cands[i];
       if (!vis(el)) continue;
       const ti = (el.getAttribute('title')||'').toUpperCase();
       const txt = (el.innerText||'').trim().toUpperCase();
-      const cls = (el.className||'').toUpperCase();
-      const hasPrintIcon = !!el.querySelector('i[class*="print"], [class*="print"], .icon-print');
-      const isPrintBtn = ti.includes('CETAK') || txt==='CETAK' || txt.includes('CETAK') ||
-                         (hasPrintIcon && (txt==='' || txt.length < 20)) ||
-                         cls.includes('PRINT');
+      const cls = (el.className||'').toString().toUpperCase();
+      const isPrintBtn = ti.includes('CETAK') || txt==='CETAK' || txt.includes('CETAK') || cls.includes('PRINT');
       if (isPrintBtn){
         el.setAttribute(ATTR,'1');
         return {path:path, text:(el.innerText||el.getAttribute('title')||'').slice(0,60), html:(el.outerHTML||'').slice(0,400)};
@@ -824,23 +849,30 @@ def trigger_print_and_wait(driver):
     # handler (which opens the report overlay, not native print) is bound on the
     # detail form's IFRAME — ActionChains(Ctrl+P) only reached the top document
     # body (form not found → body fallback), so the iframe handler never fired.
+    # Timeout 8s (was 12s) — diagnostic shows overlay appears in ~4-5s; 8s is
+    # a safe margin, saves 4s on the failed-Ctrl+P path (DFT doesn't respond to
+    # Ctrl+P, falls through to the Cetak button below).
     try:
         driver.switch_to.default_content()
         driver.execute_script(JS_DISPATCH_CTRL_P)
-        ux = wait_report_overlay(driver, timeout=12)
+        ux = wait_report_overlay(driver, timeout=8)
         if ux:
             return ux, "Ctrl+P"
     except Exception:
         pass
 
-    # Fallback: Cetak button via JS clickSeq (reliable jQuery trigger)
+    # Fallback: Cetak button via JS clickSeq. With the fixed JS_FIND_PRINT
+    # (targets the print ICON #btnPrint, not the outer container), clicking the
+    # icon bubbles UP through .tile-content.icon → .tile.dropdown-toggle →
+    # handler fires → overlay opens. This is the reliable path for DFT drafts
+    # (Ctrl+P doesn't trigger them). Timeout 10s (was 15s) — overlay ~5s + margin.
     if _click_print_button(driver):
         say_step("Cetak (tombol Cetak)", "FALLBACK")
-        ux = wait_report_overlay(driver, timeout=15)
+        ux = wait_report_overlay(driver, timeout=10)
         if ux:
             return ux, "tombol Cetak"
 
-    # Retry: re-focus + re-dispatch Ctrl+P
+    # Retry: re-focus + re-dispatch Ctrl+P (last resort). Timeout 8s (was 12s).
     try:
         ActionChains(driver).send_keys(Keys.ESCAPE).perform()
     except Exception:
@@ -852,7 +884,7 @@ def trigger_print_and_wait(driver):
         driver.switch_to.default_content()
         driver.execute_script(JS_DISPATCH_CTRL_P)
         say_step("Cetak (retry Ctrl+P)", "RETRY")
-        ux = wait_report_overlay(driver, timeout=12)
+        ux = wait_report_overlay(driver, timeout=8)
         if ux:
             return ux, "Ctrl+P (retry)"
     except Exception:
@@ -920,33 +952,35 @@ def process_nomor(driver, nomor, seq, limit, row_h, suffix_map):
                 say("    (tanpa suffix)")
 
         # ─── PRINT + DOWNLOAD ────────────────────────────────────────────
-        # DFT drafts: synthetic Ctrl+P / Cetak-button click don't trigger
-        # Accurate's report handler for drafts (proven by 2 test runs +
-        # diagnostic: overlay appears on MANUAL click only, not on
-        # ActionChains or JS-dispatched events). BUT the "Unduh XLS" button
-        # INSIDE the overlay accepts synthetic clicks (proven by the console
-        # macro test — JS click on "Unduh XLS" triggered the download).
+        # With the fixed JS_FIND_PRINT (targets the print ICON #btnPrint, not
+        # the outer container), the Cetak button click now bubbles UP through
+        # .tile-content.icon → .tile.dropdown-toggle → handler fires → overlay
+        # opens. This works for BOTH approved IA AND DFT drafts — the previous
+        # failure was a SELECTOR bug (clicking the container, not the icon),
+        # NOT an isTrusted issue.
         #
-        # So the semi-manual flow for DFT is:
-        #   1. Tool opens detail + reads suffix (done above)
-        #   2. Tool prompts user → user clicks Cetak manually (the ONE manual
-        #      step — can't be automated for drafts)
-        #   3. Python polls for "Unduh XLS" overlay to appear (wait_report_overlay
-        #      180s) — overlay appears once user clicked Cetak
-        #   4. Python auto-clicks "Unduh XLS" via smart_click (the button
-        #      accepts synthetic clicks)
-        #   5. Python detects download + renames with suffix + closes → next
-        # NO console paste / __dg.dl() needed — user only clicks Cetak.
-        # Approved IA (IA.xxxx): fully auto — trigger_print_and_wait.
+        # DFT strategy: try auto-print FIRST (trigger_print_and_wait). If it
+        # fails (rare — only if the icon fix is wrong), fall back to manual
+        # Cetak (user clicks, Python polls for overlay 120s). Minimal risk:
+        # if auto works → fully automatic (no manual step); if not → manual
+        # fallback keeps the pipeline running.
         is_draft = nomor.startswith("DFT.")
 
         if is_draft:
-            say("  → [DFT MANUAL] Klik Cetak di Accurate (1x). Python auto-klik Unduh XLS...")
-            ux = wait_report_overlay(driver, timeout=180)
-            if not ux:
-                raise AppError("E_PRINT", "overlay tidak muncul dalam 180s — klik Cetak manual di Accurate")
-            say_step("Overlay (manual Cetak)", "OK")
+            # DFT: try auto-print first. The fixed JS_FIND_PRINT → JS_CLICK_SEQ_EL
+            # on the #btnPrint icon should open the overlay (bubbles to handler).
+            ux, method = trigger_print_and_wait(driver)
+            if ux:
+                say_step(f"Cetak ({method})", "AUTO")
+            else:
+                # Auto failed → manual fallback. User clicks Cetak, Python polls.
+                say("  → [DFT] Auto-cetak gagal. Klik Cetak manual di Accurate, Python tunggu overlay...")
+                ux = wait_report_overlay(driver, timeout=120)
+                if not ux:
+                    raise AppError("E_PRINT", "overlay tidak muncul — auto & manual both failed")
+                say_step("Cetak (manual)", "OK")
         else:
+            # Approved IA: fully auto-print.
             ux, method = trigger_print_and_wait(driver)
             if not ux:
                 raise AppError("E_PRINT", "overlay report tidak muncul")
