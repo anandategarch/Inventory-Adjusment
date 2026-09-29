@@ -225,6 +225,12 @@ return (function(){
 # This replaces the old slow path: inp.send_keys(code) [~200ms+ WebDriver
 # round-trip per key] + time.sleep(1.2) [fixed wait]. Net speedup ~3-4x per
 # cabang code (was ~1.5-2.0s, now ~300-500ms).
+#
+# INPUT SCOPE: getTargetInput() scopes to chip.closest('li') — the panel input
+# is a descendant of the <li> PARENT of the chip div (not inside the chip div
+# itself). Matches the OLD working XPath XP_CHIP_LI_INPUT =
+# '//div[@key="createdByFilter"]/parent::li//input'. If the <li> has no
+# visible text input, returns null → Python send_keys fallback takes over.
 JS_TYPE_FAST = """
 return (function(code){
   function vis(el){
@@ -257,12 +263,20 @@ return (function(code){
     try { el.dispatchEvent(makeKeyboardEvent(type, key, keyCode)); } catch(e){}
   }
   function getTargetInput(){
+    // Scope to the parent <li> of the chip — the panel input is a descendant
+    // of <li>, NOT of the chip div itself. Matches the OLD working XPath
+    // XP_CHIP_LI_INPUT = '//div[@key="createdByFilter"]/parent::li//input'.
+    // (Previous version scoped to the chip div → querySelectorAll found nothing
+    // → fell back to the WHOLE document → typed into a random input → false
+    // "TYPED" → autocomplete never fired → all cabang FAIL.)
+    // No document-wide fallback: if the <li> has no visible text input, return
+    // null so the Python send_keys fallback takes over (the OLD working path).
     const chip = document.querySelector('div.filter-item[key="createdByFilter"]');
-    const scope = chip || document;
+    const scope = (chip && (chip.closest('li') || chip.parentElement)) || null;
+    if (!scope) return null;
     const sel = 'input[type="text"]:not([readonly]):not([disabled]), input:not([type]):not([readonly]):not([disabled]), input[type="search"]:not([readonly]):not([disabled])';
-    let cands = Array.from(scope.querySelectorAll(sel)).filter(vis);
-    if (!cands.length) cands = Array.from(document.querySelectorAll(sel)).filter(vis);
-    return cands.length ? cands[cands.length - 1] : null;
+    const cands = Array.from(scope.querySelectorAll(sel)).filter(vis);
+    return cands.length ? cands[0] : null;  // FIRST visible input in <li> (matches OLD find_panel_input)
   }
   const input = getTargetInput();
   if (!input) return 'NO_INPUT';
