@@ -840,6 +840,20 @@ def main():
     say("  Chrome   : terhubung (port 9222)")
 
     recover_to_list(driver)
+
+    # v: hard reset before scanning grid — grid might be broken from filter step.
+    # filter_pembuat_data.py navigates the SPA (funnel -> panel -> chip -> Save),
+    # which leaves SlickGrid in a broken state (stylesheet detached / DOM polluted
+    # with 100+ residual overlay elements). collect_nomor_list then scans 0 rows
+    # and the tool aborts with "tidak ada transaksi terbaca di grid". A btnRefresh
+    # here reloads the list page → grid re-renders → scan finds rows properly.
+    say("  Refresh list (reset grid dari filter)...")
+    hard_reset_list(driver)
+    # Re-find list frame after refresh (the refresh may swap the iframe)
+    if not find_list_frame(driver, timeout=12):
+        say("  \u274c Gagal: list frame tidak ditemukan setelah refresh.")
+        return 1
+
     say_step("Kumpul transaksi + Keterangan")
     order, row_h, suffix_map = collect_nomor_list(driver)
     if not order:

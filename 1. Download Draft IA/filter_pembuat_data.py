@@ -47,10 +47,8 @@ def say(msg):
     sys.stdout.flush()
 
 def say_section(title):
-    """Print a major section header."""
-    say("=" * 60)
-    say(f" {title}")
-    say("=" * 60)
+    """Print a major section header (clean style, no === separators)."""
+    say(f"── {title} ──")
 
 def say_step(label, status="OK"):
     """Print a step with aligned label + status."""
@@ -58,11 +56,10 @@ def say_step(label, status="OK"):
     say("  " + label + ("." * dots) + " " + status)
 
 def say_summary_box(lines):
-    """Print a summary box."""
-    say("=" * 60)
+    """Print a summary (clean style, no === box)."""
+    say("── RINGKASAN ──")
     for line in lines:
         say(f" {line}")
-    say("=" * 60)
 
 def is_ui_mode():
     return os.environ.get("IA_UI_MODE") == "1"
