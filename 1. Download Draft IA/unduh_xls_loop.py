@@ -345,6 +345,64 @@ return (function(){
 })()
 """
 
+# Native clickSeq on a specific WebElement (passed as arguments[0]).
+# Same dispatch sequence as JS_CLICK_ROW_SEQ — proven reliable for Accurate's
+# jQuery click handlers (vs ActionChains which silently fails to fire them).
+# Used by _click_print_button to click the "Cetak" button reliably.
+JS_CLICK_SEQ_EL = """
+return (function(el){
+  if (!el) return false;
+  try { el.scrollIntoView({block:'center', inline:'center'}); } catch(e){ try{el.scrollIntoView();}catch(_){} }
+  const init = {bubbles:true, cancelable:true, view:window, button:0, buttons:1, composed:true};
+  const types = ['pointerover','pointerenter','pointerdown','mousedown','pointerup','mouseup','click'];
+  for (const t of types){
+    try {
+      if (t.startsWith('pointer') && typeof PointerEvent !== 'undefined') {
+        el.dispatchEvent(new PointerEvent(t, Object.assign({}, init, {pointerId:1, pointerType:'mouse', isPrimary:true})));
+      } else if (!t.startsWith('pointer')) {
+        el.dispatchEvent(new MouseEvent(t, init));
+      }
+    } catch(e){}
+  }
+  return true;
+})(arguments[0])
+"""
+
+# Dispatch Ctrl+P as a real JS KeyboardEvent to the top document AND every
+# same-origin iframe document. Accurate's Ctrl+P handler (the one that opens
+# the report overlay instead of the native print dialog) is bound on `keydown`
+# in the DETAIL FORM'S IFRAME — not the top document. ActionChains(Ctrl+P)
+# sends the key to whatever has focus (usually top body after _focus_form
+# falls back), so the iframe handler never receives it. Dispatching the event
+# directly to all documents guarantees the handler fires wherever it's bound.
+# Diagnostic confirmed: manual Ctrl+P opens `metro window-overlay` with
+# "UNDUH XLS" button — this JS dispatch replicates that path.
+JS_DISPATCH_CTRL_P = """
+return (function(){
+  function dispatch(doc){
+    let down, up;
+    try {
+      down = new KeyboardEvent('keydown', {key:'p', code:'KeyP', keyCode:80, which:80, ctrlKey:true, bubbles:true, cancelable:true, composed:true});
+      up   = new KeyboardEvent('keyup',   {key:'p', code:'KeyP', keyCode:80, which:80, ctrlKey:true, bubbles:true, cancelable:true, composed:true});
+    } catch(e) {
+      down = new Event('keydown', {bubbles:true, cancelable:true});
+      up   = new Event('keyup',   {bubbles:true, cancelable:true});
+    }
+    // Force keyCode/which/ctrlKey readable (some jQuery code reads these)
+    try { Object.defineProperties(down, {keyCode:{get:()=>80}, which:{get:()=>80}, ctrlKey:{get:()=>true}, key:{get:()=>'p'}}); } catch(e){}
+    try { Object.defineProperties(up,   {keyCode:{get:()=>80}, which:{get:()=>80}, ctrlKey:{get:()=>true}, key:{get:()=>'p'}}); } catch(e){}
+    try { doc.dispatchEvent(down); } catch(e){}
+    try { doc.dispatchEvent(up); } catch(e){}
+  }
+  dispatch(document);
+  const fr = document.querySelectorAll('iframe, frame');
+  for (let i=0;i<fr.length;i++){
+    try { if (fr[i].contentDocument) dispatch(fr[i].contentDocument); } catch(e){}
+  }
+  return true;
+})()
+"""
+
 # ============================================================
 # UTILITAS
 # ============================================================
@@ -736,6 +794,18 @@ def _click_print_button(driver):
     if not el:
         clear_mark(driver, pr["path"])
         return False
+    # JS clickSeq FIRST — proven reliable for Accurate jQuery click handlers
+    # (ActionChains silently failed to open the report overlay for DFT drafts;
+    # the click "succeeded" in Selenium but the handler never fired). Same
+    # dispatch pattern as JS_CLICK_ROW_SEQ which fixed the row-click issue.
+    try:
+        clicked = driver.execute_script(JS_CLICK_SEQ_EL, el)
+        if clicked:
+            clear_mark(driver, pr["path"])
+            return True
+    except Exception:
+        pass
+    # Fallback: ActionChains / el.click() / JS click (smart_click chain)
     smart_click(driver, el)
     clear_mark(driver, pr["path"])
     return True
@@ -749,20 +819,28 @@ def trigger_print_and_wait(driver):
     _focus_form(driver)
     settle(0.1)
 
+    # JS-dispatched Ctrl+P — sends a real KeyboardEvent(keydown, ctrlKey:true,
+    # key:'p') to the top document AND every iframe document. Accurate's Ctrl+P
+    # handler (which opens the report overlay, not native print) is bound on the
+    # detail form's IFRAME — ActionChains(Ctrl+P) only reached the top document
+    # body (form not found → body fallback), so the iframe handler never fired.
     try:
-        ActionChains(driver).key_down(Keys.CONTROL).send_keys('p').key_up(Keys.CONTROL).perform()
+        driver.switch_to.default_content()
+        driver.execute_script(JS_DISPATCH_CTRL_P)
         ux = wait_report_overlay(driver, timeout=12)
         if ux:
             return ux, "Ctrl+P"
     except Exception:
         pass
 
+    # Fallback: Cetak button via JS clickSeq (reliable jQuery trigger)
     if _click_print_button(driver):
         say_step("Cetak (tombol Cetak)", "FALLBACK")
         ux = wait_report_overlay(driver, timeout=15)
         if ux:
             return ux, "tombol Cetak"
 
+    # Retry: re-focus + re-dispatch Ctrl+P
     try:
         ActionChains(driver).send_keys(Keys.ESCAPE).perform()
     except Exception:
@@ -771,7 +849,8 @@ def trigger_print_and_wait(driver):
     _focus_form(driver)
     settle(0.1)
     try:
-        ActionChains(driver).key_down(Keys.CONTROL).send_keys('p').key_up(Keys.CONTROL).perform()
+        driver.switch_to.default_content()
+        driver.execute_script(JS_DISPATCH_CTRL_P)
         say_step("Cetak (retry Ctrl+P)", "RETRY")
         ux = wait_report_overlay(driver, timeout=12)
         if ux:
@@ -840,10 +919,10 @@ def process_nomor(driver, nomor, seq, limit, row_h, suffix_map):
             else:
                 say("    (tanpa suffix)")
 
-        say_step("Cetak (Ctrl+P)")
         ux, method = trigger_print_and_wait(driver)
         if not ux:
             raise AppError("E_PRINT", "overlay report tidak muncul")
+        say_step(f"Cetak ({method})")
 
         say_step("Unduh XLS")
         before = snapshot_downloads()
