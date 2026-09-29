@@ -27,7 +27,7 @@ MAX_CONSECUTIVE_FAIL = 3
 DELAY_BETWEEN_TRANSACTIONS = 2.5  # seconds — prevent Accurate rate-limit after 4+ rapid prints
 HARD_RESET_EVERY_N = 4  # more frequent — E_ROW can happen at #5, #7 (before #8)
 DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads")
-NOMOR_RE = re.compile(r"IA\.\d{4}\.\d{2}\.\d+")
+NOMOR_RE = re.compile(r"(?:IA\.\d{4}\.\d{2}\.\d+|DFT\.\d+)")
 
 ERROR_CATALOG = {
     "E_LIST": ("Grid list tidak ditemukan.", "Pastikan tab Penyesuaian Persediaan terbuka & login aktif."),
@@ -93,7 +93,7 @@ function vis(el){
 
 JS_RENDERED_ROWS = """
 return (function(){
-  var re = /IA\\.\\d{4}\\.\\d{2}\\.\\d+/;
+  var re = /(?:IA\\.\\d{4}\\.\\d{2}\\.\\d+|DFT\\.\\d+)/;
   var headers = document.querySelectorAll('.slick-header-column');
   var ketIdx = -1, nomIdx = -1;
   for (var i=0;i<headers.length;i++){
@@ -195,7 +195,7 @@ return (function(){
 JS_MARK_CLOSE = JS_VIS + """
 return (function(nomor){
   const ATTR='data-fl-target';
-  const re = /IA\\.\\d{4}\\.\\d{2}\\.\\d+/;
+  const re = /(?:IA\\.\\d{4}\\.\\d{2}\\.\\d+|DFT\\.\\d+)/;
   function scan(doc, path){
     const els = doc.querySelectorAll('li, a, div, span');
     for (const el of els){
