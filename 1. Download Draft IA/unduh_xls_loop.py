@@ -979,7 +979,7 @@ def _click_print_button(driver):
 
     return True  # overlay should now be opening — wait_report_overlay finds #print-preview-excel
 
-def trigger_print_and_wait(driver):
+def trigger_print_and_wait(driver, skip_ctrl_p=False):
     try:
         ActionChains(driver).send_keys(Keys.ESCAPE).perform()
     except Exception:
@@ -996,31 +996,31 @@ def trigger_print_and_wait(driver):
     # Timeout 8s (was 12s) — diagnostic shows overlay appears in ~4-5s; 8s is
     # a safe margin, saves 4s on the failed-Ctrl+P path (DFT doesn't respond to
     # Ctrl+P, falls through to the Cetak button below).
-    try:
-        driver.switch_to.default_content()
-        driver.execute_script(JS_DISPATCH_CTRL_P)
-        ux = wait_report_overlay(driver, timeout=8)
-        if ux:
-            return ux, "Ctrl+P"
-    except Exception:
-        pass
+    #
+    # skip_ctrl_p=True for DFT drafts: Ctrl+P doesn't trigger DFT print (proven
+    # by tests — 8s wasted timeout every transaction). Skip it → go straight to
+    # the Cetak button 2-step flow (#btnPrint → menu item). Saves ~8s per DFT.
+    if not skip_ctrl_p:
+        try:
+            driver.switch_to.default_content()
+            driver.execute_script(JS_DISPATCH_CTRL_P)
+            ux = wait_report_overlay(driver, timeout=8)
+            if ux:
+                return ux, "Ctrl+P"
+        except Exception:
+            pass
 
-    # Fallback: Cetak button via JS clickSeq. With the fixed JS_FIND_PRINT
-    # (targets the print ICON #btnPrint, not the outer container), clicking the
-    # icon bubbles UP through .tile-content.icon → .tile.dropdown-toggle →
-    # handler fires → overlay opens. This is the reliable path for DFT drafts
-    # (Ctrl+P doesn't trigger them). Timeout 10s (was 15s) — overlay ~5s + margin.
+    # Cetak button via JS clickSeq (2-step: #btnPrint → "#Penyesuaian Persediaan"
+    # menu item → overlay). This is the reliable path for DFT drafts (and the
+    # fallback for IA if Ctrl+P fails). Timeout 10s — overlay ~5s + margin.
     if _click_print_button(driver):
         say_step("Cetak (tombol Cetak)", "FALLBACK")
         ux = wait_report_overlay(driver, timeout=10)
         if ux:
             return ux, "tombol Cetak"
 
-    # Retry: re-focus + re-dispatch Ctrl+P (last resort). Timeout 8s (was 12s).
-    # NOTE: removed (user request — "kalau gagal gak perlu retry ctrl P"). The
-    # retry Ctrl+P is useless: if attempt 1 (Ctrl+P) already failed, retrying
-    # the same dispatch won't succeed. Saves 8s on the failure path. Worst-case
-    # failure now 18s (was 26s).
+    # NOTE: removed retry Ctrl+P (user request). If Ctrl+P + Cetak button both
+    # fail, retrying Ctrl+P won't help. Worst-case failure now 18s (was 26s).
 
     return None, None
 
@@ -1111,9 +1111,11 @@ def process_nomor(driver, nomor, seq, limit, row_h, suffix_map):
         is_draft = nomor.startswith("DFT.")
 
         if is_draft:
-            # DFT: try auto-print first. The fixed JS_FIND_PRINT → JS_CLICK_SEQ_EL
-            # on the #btnPrint icon should open the overlay (bubbles to handler).
-            ux, method = trigger_print_and_wait(driver)
+            # DFT: skip Ctrl+P (doesn't trigger DFT print — 8s wasted timeout,
+            # proven by tests). Go straight to the Cetak button 2-step flow
+            # (#btnPrint → "#Penyesuaian Persediaan" menu item → overlay).
+            # This is the proven working path (v6 console + 8/8 test success).
+            ux, method = trigger_print_and_wait(driver, skip_ctrl_p=True)
             if ux:
                 say_step(f"Cetak ({method})", "AUTO")
             else:
