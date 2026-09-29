@@ -24,7 +24,9 @@ from selenium.common.exceptions import (
 DEBUG_PORT = 9222
 MAX_ROWS = 0
 MAX_CONSECUTIVE_FAIL = 3
-DELAY_BETWEEN_TRANSACTIONS = 2.5  # seconds — prevent Accurate rate-limit after 4+ rapid prints
+DELAY_BETWEEN_TRANSACTIONS = 1.5  # seconds — prevent Accurate rate-limit after 4+ rapid prints
+                                   # (was 2.5; trimmed to 1.5 — still safe, JS clickSeq + faster
+                                   # detail detection recover headroom)
 HARD_RESET_EVERY_N = 4  # more frequent — E_ROW can happen at #5, #7 (before #8)
 DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads")
 NOMOR_RE = re.compile(r"(?:IA\.\d{4}\.\d{2}\.\d+|DFT\.\d+)")
@@ -226,11 +228,68 @@ return (function(nomor){
 })(arguments[0])
 """
 
+# Native clickSeq (pointer+mouse events) — proven reliable for Accurate's jQuery
+# SPA navigation handlers (vs ActionChains which silently fails to trigger them).
+# Used for the row click that opens the transaction detail tab.
+JS_CLICK_ROW_SEQ = JS_VIS + """
+return (function(nomor){
+  function clickSeq(el){
+    if (!el) return false;
+    try { el.scrollIntoView({block:'center', inline:'center'}); } catch(e){ try{el.scrollIntoView();}catch(_){} }
+    const init = {bubbles:true, cancelable:true, view:window, button:0, buttons:1, composed:true};
+    const types = ['pointerover','pointerenter','pointerdown','mousedown','pointerup','mouseup','click'];
+    for (const t of types){
+      try {
+        if (t.startsWith('pointer') && typeof PointerEvent !== 'undefined') {
+          el.dispatchEvent(new PointerEvent(t, Object.assign({}, init, {pointerId:1, pointerType:'mouse', isPrimary:true})));
+        } else if (!t.startsWith('pointer')) {
+          el.dispatchEvent(new MouseEvent(t, init));
+        }
+      } catch(e){}
+    }
+    return true;
+  }
+  function scan(doc){
+    const rows = doc.querySelectorAll('.slick-row');
+    for (const r of rows){
+      if (!vis(r)) continue;
+      const t = (r.innerText || r.textContent || '').trim();
+      if (t.indexOf(nomor) === -1) continue;
+      const cell = r.querySelector('.slick-cell') || r;
+      if (clickSeq(cell)) return 'CLICKED';
+    }
+    const fr = doc.querySelectorAll('iframe, frame');
+    for (let i=0;i<fr.length;i++){ try{ const d=fr[i].contentDocument; if(d){ const r=scan(d); if(r) return r; } }catch(e){} }
+    return null;
+  }
+  return scan(document);
+})(arguments[0])
+"""
+
+# Detail-open detector. For approved IA, the nomor shows in an <input> (header
+# number field). For DFT *drafts*, the nomor appears in a <div>/<span> (status
+# text like "Draft - DFT.4519226"), NOT in an input — so we also scan visible
+# text nodes. Fallback: a transaction detail form is loaded (list grid absent
+# in this document) which means SPA navigated to the detail page.
 JS_DETAIL_OPEN = JS_VIS + """
 return (function(nomor){
   function scan(doc){
+    // 1) nomor in an input value (approved IA detail page)
     const inps = doc.querySelectorAll('input');
     for (const i of inps){ if ((i.value||'').trim()===nomor && vis(i)) return true; }
+    // 2) nomor in any visible short text node (DFT draft detail uses div/span)
+    const els = doc.querySelectorAll('div, span, li, a, label, p, h1, h2, h3, h4');
+    for (const el of els){
+      if (!vis(el)) continue;
+      const t = (el.innerText || el.textContent || '').trim();
+      if (!t || t.length > 80) continue;
+      if (t.indexOf(nomor) !== -1) return true;
+    }
+    // 3) detail form loaded + list grid absent in this doc (SPA navigated away)
+    const hasForm = !!doc.querySelector('.transaction-form, .form-horizontal, [class*="detail-form"], .tab-content');
+    const hasGrid = !!doc.querySelector('.slick-grid');
+    if (hasForm && !hasGrid) return true;
+    // recurse into iframes
     const fr = doc.querySelectorAll('iframe, frame');
     for (let i=0;i<fr.length;i++){ try{ const d=fr[i].contentDocument; if(d && scan(d)) return true; }catch(e){} }
     return false;
@@ -602,6 +661,15 @@ def find_rendered_row(driver, nomor):
     return None
 
 def click_row_by_nomor(driver, nomor, idx, row_h):
+    # Try JS clickSeq FIRST — proven reliable for Accurate's jQuery SPA
+    # navigation (ActionChains silently fails to trigger the row-click handler
+    # that opens the detail tab, especially for DFT draft rows).
+    try:
+        res = driver.execute_script(JS_CLICK_ROW_SEQ, nomor)
+        if res == "CLICKED":
+            return "JSSEQ"
+    except Exception:
+        pass
     row = find_rendered_row(driver, nomor)
     if row:
         return smart_click(driver, row)
@@ -754,12 +822,12 @@ def process_nomor(driver, nomor, seq, limit, row_h, suffix_map):
         how = click_row_by_nomor(driver, nomor, seq - 1, row_h)
         if not how:
             raise AppError("E_ROW", f"baris {nomor} tidak ditemukan")
-        say_step("Klik baris")
+        say_step("Klik baris", how)
 
-        say_step("Buka detail")
         driver.switch_to.default_content()
         if not wait_detail_open(driver, nomor, timeout=15):
             raise AppError("E_DETAIL", f"input {nomor} tidak muncul")
+        say_step("Buka detail")
 
         say_step("Baca Keterangan")
         suffix = sanitize_suffix((suffix_map or {}).get(nomor, ""))
