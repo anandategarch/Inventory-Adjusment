@@ -929,11 +929,50 @@ def _click_print_button(driver):
     #   Step 2: click "#Penyesuaian Persediaan" menu item (<A data-bind="click: click">)
     #           → opens report overlay
     # After this returns True, wait_report_overlay will find #print-preview-excel.
-    try:
-        driver.switch_to.default_content()
-        pr = driver.execute_script(JS_FIND_PRINT)
-    except Exception:
-        pr = None
+    #
+    # CRITICAL: poll for #btnPrint (stable id, DETAIL toolbar print) to be VISIBLE
+    # before clicking. The detail toolbar renders AFTER the nomor appears (which
+    # wait_detail_open detects). Without this poll, _click_print_button might run
+    # before #btnPrint is in the DOM → JS_FIND_PRINT's fallback selector
+    # i[class*="print"] matches the MODULE/LIST print icon (icn-transaction-printer
+    # in <nav class="horizontal-menu">) → clicks the WRONG button → list print
+    # dialog → fail. This race was masked by the old 8s Ctrl+P timeout (which gave
+    # the toolbar time to render). With skip_ctrl_p=True for DFT, the race is
+    # exposed — so we poll #btnPrint explicitly (up to 5s).
+    pr = None
+    end = time.time() + 5
+    while time.time() < end:
+        try:
+            driver.switch_to.default_content()
+            # Check #btnPrint (stable id, detail toolbar) — NOT the broader
+            # JS_FIND_PRINT (which falls back to module/list print icon).
+            found = driver.execute_script("""
+                const el = document.getElementById('btnPrint');
+                if (el){
+                    const st = window.getComputedStyle(el);
+                    if (st.display !== 'none' && st.visibility !== 'hidden' && parseFloat(st.opacity) !== 0){
+                        const r = el.getBoundingClientRect();
+                        if (r.width > 0 && r.height > 0){
+                            el.setAttribute('data-fl-target','1');
+                            return {path:[], text:'btnPrint', html:(el.outerHTML||'').slice(0,400)};
+                        }
+                    }
+                }
+                return null;
+            """)
+            if found:
+                pr = found
+                break
+        except Exception:
+            pass
+        time.sleep(0.3)
+    # Fallback: old JS_FIND_PRINT (broader — only if #btnPrint not found in 5s)
+    if not pr:
+        try:
+            driver.switch_to.default_content()
+            pr = driver.execute_script(JS_FIND_PRINT)
+        except Exception:
+            pr = None
     if not pr:
         return False
     el = find_marked(driver, pr["path"])
