@@ -428,6 +428,95 @@ return (function(){
 })()
 """
 
+# Find the "#Penyesuaian Persediaan" menu item in the dropdown that appears
+# after clicking #btnPrint. The dropdown is a <ul class="dropdown-menu"> with
+# <li><a data-bind="click: click"> items. CRITICAL: search <A> FIRST (the <A>
+# has the KO click handler) — not <LI> (the <A>'s parent). Clicking <LI>
+# dispatches events on the <LI>, which bubble UP to <UL>, NOT DOWN to <A> →
+# handler never fires → overlay never opens (this was the v5 console bug).
+# If only <LI> matches, walk DOWN to find the <A> inside it.
+# Recorder confirmed: <a data-bind="click: click"><span>#Penyesuaian Persediaan</span></a>
+JS_FIND_DROPDOWN_ITEM = JS_VIS + """
+return (function(keyword){
+  const ATTR='data-fl-target';
+  const want = String(keyword||'').toUpperCase();
+  function scan(doc, path){
+    // 1. <A> inside .dropdown-menu (has KO click handler)
+    const menus = doc.querySelectorAll('.dropdown-menu, ul[class*="dropdown-menu"]');
+    for (let mi=0; mi<menus.length; mi++){
+      const menu = menus[mi];
+      if (!vis(menu)) continue;
+      const links = menu.querySelectorAll('a');
+      for (const el of links){
+        if (!vis(el)) continue;
+        const t = (el.innerText||'').trim().toUpperCase();
+        if (!t || t.length > 60) continue;
+        if (t.indexOf(want) !== -1){
+          el.setAttribute(ATTR,'1');
+          return {path:path, text:(el.innerText||'').trim().slice(0,60), html:(el.outerHTML||'').slice(0,400)};
+        }
+      }
+      // 2. <LI> fallback → walk down to <A>
+      const items = menu.querySelectorAll('li');
+      for (const el of items){
+        if (!vis(el)) continue;
+        const t = (el.innerText||'').trim().toUpperCase();
+        if (!t || t.length > 60) continue;
+        if (t.indexOf(want) !== -1){
+          const a = el.querySelector('a');
+          if (a && vis(a)){
+            a.setAttribute(ATTR,'1');
+            return {path:path, text:(a.innerText||'').trim().slice(0,60), html:(a.outerHTML||'').slice(0,400)};
+          }
+        }
+      }
+    }
+    // 3. Fallback: any visible <A> with text (not in grid/module-title/tab-control)
+    const all = doc.querySelectorAll('a');
+    for (const el of all){
+      if (!vis(el)) continue;
+      if (el.closest && el.closest('.slick-grid, .slick-viewport, .slick-row, .module-switcher-container, .navigation-bar, .tab-control')) continue;
+      const t = (el.innerText||'').trim().toUpperCase();
+      if (!t || t.length > 60) continue;
+      if (t.indexOf(want) !== -1){
+        el.setAttribute(ATTR,'1');
+        return {path:path, text:(el.innerText||'').trim().slice(0,60), html:(el.outerHTML||'').slice(0,400)};
+      }
+    }
+    const fr = doc.querySelectorAll('iframe, frame');
+    for (let i=0;i<fr.length;i++){
+      try{ const d=fr[i].contentDocument; if(!d) continue; const r=scan(d, path.concat([i])); if(r) return r; }catch(e){}
+    }
+    return null;
+  }
+  return scan(document, []);
+})(arguments[0])
+"""
+
+# Click an element by its stable ID via native clickSeq. Recorder confirmed
+# stable IDs: #print-preview-excel (Unduh XLS button), #print-preview-close
+# (Tutup button). These IDs are stable across transactions — more reliable
+# than text search (JS_FIND_MARK). Used for the download + close steps.
+JS_CLICK_BY_ID = """
+return (function(id){
+  const el = document.getElementById(id);
+  if (!el) return false;
+  try { el.scrollIntoView({block:'center', inline:'center'}); } catch(e){ try{el.scrollIntoView();}catch(_){} }
+  const init = {bubbles:true, cancelable:true, view:window, button:0, buttons:1, composed:true};
+  const types = ['pointerover','pointerenter','pointerdown','mousedown','pointerup','mouseup','click'];
+  for (const t of types){
+    try {
+      if (t.startsWith('pointer') && typeof PointerEvent !== 'undefined'){
+        el.dispatchEvent(new PointerEvent(t, Object.assign({}, init, {pointerId:1, pointerType:'mouse', isPrimary:true})));
+      } else if (!t.startsWith('pointer')){
+        el.dispatchEvent(new MouseEvent(t, init));
+      }
+    } catch(e){}
+  }
+  return true;
+})(arguments[0])
+"""
+
 # ============================================================
 # UTILITAS
 # ============================================================
@@ -563,8 +652,35 @@ def wait_detail_closed(driver, nomor, timeout=15):
     return False
 
 def wait_report_overlay(driver, timeout=20):
+    # Check #print-preview-excel FIRST (stable id from recorder — more reliable
+    # than text search). Fall back to JS_FIND_MARK("Unduh XLS") text search.
+    # v6 console found #print-preview-excel in ~0.8s after menu item click.
+    # Returns a mark dict {path, text, html} compatible with find_marked + smart_click.
     end = time.time() + timeout
     while time.time() < end:
+        try:
+            driver.switch_to.default_content()
+            # 1. Check #print-preview-excel (stable id) via a quick JS that marks it
+            #    using the same ATTR as JS_FIND_MARK so find_marked works.
+            found = driver.execute_script("""
+                const el = document.getElementById('print-preview-excel');
+                if (el){
+                    const st = window.getComputedStyle(el);
+                    if (st.display !== 'none' && st.visibility !== 'hidden' && parseFloat(st.opacity) !== 0){
+                        const r = el.getBoundingClientRect();
+                        if (r.width > 0 && r.height > 0){
+                            el.setAttribute('data-fl-target','1');
+                            return {path:[], text:(el.innerText||'').slice(0,60), html:(el.outerHTML||'').slice(0,400)};
+                        }
+                    }
+                }
+                return null;
+            """)
+            if found:
+                return found
+        except Exception:
+            pass
+        # 2. Fallback: text search "Unduh XLS"
         try:
             driver.switch_to.default_content()
             ux = driver.execute_script(JS_FIND_MARK, "Unduh XLS", False)
@@ -808,6 +924,11 @@ def _focus_form(driver):
         pass
 
 def _click_print_button(driver):
+    # 2-STEP FLOW (replicates v6 console — proven working):
+    #   Step 1: click #btnPrint (icon) → opens dropdown menu
+    #   Step 2: click "#Penyesuaian Persediaan" menu item (<A data-bind="click: click">)
+    #           → opens report overlay
+    # After this returns True, wait_report_overlay will find #print-preview-excel.
     try:
         driver.switch_to.default_content()
         pr = driver.execute_script(JS_FIND_PRINT)
@@ -819,21 +940,44 @@ def _click_print_button(driver):
     if not el:
         clear_mark(driver, pr["path"])
         return False
-    # JS clickSeq FIRST — proven reliable for Accurate jQuery click handlers
-    # (ActionChains silently failed to open the report overlay for DFT drafts;
-    # the click "succeeded" in Selenium but the handler never fired). Same
-    # dispatch pattern as JS_CLICK_ROW_SEQ which fixed the row-click issue.
+
+    # STEP 1: click #btnPrint via JS clickSeq (proven — v6 console Step 1)
     try:
         clicked = driver.execute_script(JS_CLICK_SEQ_EL, el)
-        if clicked:
-            clear_mark(driver, pr["path"])
-            return True
+        if not clicked:
+            smart_click(driver, el)
     except Exception:
-        pass
-    # Fallback: ActionChains / el.click() / JS click (smart_click chain)
-    smart_click(driver, el)
+        smart_click(driver, el)
     clear_mark(driver, pr["path"])
-    return True
+
+    # STEP 2: poll for "#Penyesuaian Persediaan" dropdown menu item, click it.
+    # The dropdown appears ~0-1s after #btnPrint click. The <A> menu item has
+    # data-bind="click: click" (KO handler) — clicking it opens the overlay.
+    # v6 console found it in 0-3s; timeout 8s for safety.
+    end = time.time() + 8
+    menu_mark = None
+    while time.time() < end:
+        try:
+            driver.switch_to.default_content()
+            menu_mark = driver.execute_script(JS_FIND_DROPDOWN_ITEM, "Penyesuaian Persediaan")
+        except Exception:
+            menu_mark = None
+        if menu_mark:
+            break
+        time.sleep(0.2)
+    if not menu_mark:
+        return True  # btnPrint clicked but menu didn't appear — let wait_report_overlay decide
+
+    menu_el = find_marked(driver, menu_mark["path"])
+    if menu_el:
+        try:
+            if not driver.execute_script(JS_CLICK_SEQ_EL, menu_el):
+                smart_click(driver, menu_el)
+        except Exception:
+            smart_click(driver, menu_el)
+        clear_mark(driver, menu_mark["path"])
+
+    return True  # overlay should now be opening — wait_report_overlay finds #print-preview-excel
 
 def trigger_print_and_wait(driver):
     try:
@@ -881,6 +1025,18 @@ def trigger_print_and_wait(driver):
     return None, None
 
 def close_report(driver):
+    # Click #print-preview-close (stable id from recorder) via JS clickSeq.
+    # v6 console Step 4: closes the report overlay after download.
+    # Fallback: find "Tutup" by text (JS_FIND_MARK) + smart_click.
+    try:
+        driver.switch_to.default_content()
+        clicked = driver.execute_script(JS_CLICK_BY_ID, "print-preview-close")
+        if clicked:
+            settle(0.3)
+            return
+    except Exception:
+        pass
+    # Fallback: find "Tutup" by text
     try:
         driver.switch_to.default_content()
         tp = driver.execute_script(JS_FIND_MARK, "Tutup", True)
@@ -975,13 +1131,23 @@ def process_nomor(driver, nomor, seq, limit, row_h, suffix_map):
             say_step(f"Cetak ({method})")
 
         # Common: click "Unduh XLS" in the overlay → wait for download
+        # Use JS_CLICK_BY_ID("print-preview-excel") FIRST — stable id from
+        # recorder + native clickSeq (proven in v6 console Step 3). Falls back
+        # to find_marked + smart_click if the id-based click fails.
         say_step("Unduh XLS")
         before = snapshot_downloads()
-        el = find_marked(driver, ux["path"])
-        if not el:
-            clear_mark(driver, ux["path"])
-            raise AppError("E_UNDUH", "tombol Unduh XLS hilang")
-        smart_click(driver, el)
+        try:
+            driver.switch_to.default_content()
+            clicked = driver.execute_script(JS_CLICK_BY_ID, "print-preview-excel")
+        except Exception:
+            clicked = False
+        if not clicked:
+            # Fallback: find_marked + smart_click (the mark was set by wait_report_overlay)
+            el = find_marked(driver, ux["path"])
+            if not el:
+                clear_mark(driver, ux["path"])
+                raise AppError("E_UNDUH", "tombol Unduh XLS hilang")
+            smart_click(driver, el)
         clear_mark(driver, ux["path"])
 
         fname = wait_new_download(before, timeout=90)
