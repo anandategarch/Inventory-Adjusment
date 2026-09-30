@@ -2270,6 +2270,17 @@ class AutoImportApp(tk.Tk):
             messagebox.showwarning(APP_TITLE, str(e), parent=self)
             return
 
+        # Confirmation dialog before starting automation
+        mode_label = {"DRAFT": "Simpan Draf", "APPROVE": "Approve (Simpan Final)", "IMPORT": "Import Saja"}.get(mode, mode)
+        if not messagebox.askokcancel(APP_TITLE,
+                f"Import pada tanggal {self.run_date}?\n\n"
+                f"Mode  : {mode_label}\n"
+                f"File  : {len(ok_items)} siap diproses\n\n"
+                f"Klik OK untuk mulai, atau Batal untuk batal.",
+                parent=self):
+            self.log("Dibatalkan oleh pengguna (tidak jalan).", "WARN")
+            return
+
         self.run_mode = mode
         self.running = True
         self.stop_requested.clear()

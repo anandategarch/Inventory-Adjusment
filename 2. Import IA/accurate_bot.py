@@ -693,16 +693,50 @@ def handle_popups(driver, strict=False):
     """, bool(strict))
 
 
-def wait_import_result(driver, timeout=45, log=None):
+def wait_import_result(driver, timeout=90, log=None):
+    """Wait for the import confirmation popup. Timeout 90s (was 45s — import can
+    be slow for large files / slow Accurate server). Detects busy-load overlay
+    (black screen) — while it's visible, the import is still processing → reset
+    the deadline (don't timeout while loading). Logs 'sedang diproses' the first
+    time the overlay is detected, so the user knows it's not stuck."""
     deadline = time.time() + timeout
+    logged_loading = False
     while time.time() < deadline:
         human_pause(0.8, 1.6)
+        # Check for import result popup
         res = handle_popups(driver, strict=True)
         if res and res.get("found"):
             if log and res.get("clicked"):
                 kind = "WARN" if res.get("isStockWarning") else "INFO"
                 log(f"Pop-up hasil impor terdeteksi -> klik: {', '.join(res['clicked'])}", kind)
             return res
+        # Check busy-load overlay (black screen = import still processing)
+        try:
+            driver.switch_to.default_content()
+            is_loading = driver.execute_script("""
+                try {
+                    const el = document.querySelector('.busy-load-container');
+                    if (el){
+                        const st = window.getComputedStyle(el);
+                        if (st.display !== 'none' && st.visibility !== 'hidden' && parseFloat(st.opacity) !== 0){
+                            const r = el.getBoundingClientRect();
+                            if (r.width > 0 && r.height > 0) return true;
+                        }
+                    }
+                } catch(e){}
+                try {
+                    if (document.body && document.body.classList.contains('busy-load-active')) return true;
+                } catch(e){}
+                return false;
+            """)
+            if is_loading:
+                if not logged_loading and log:
+                    log("Import sedang diproses (layar hitam)... tunggu sebentar.", "INFO")
+                    logged_loading = True
+                # Import still processing → extend deadline (don't timeout while loading)
+                deadline = max(deadline, time.time() + 30)
+        except Exception:
+            pass
     return None
 
 
@@ -800,47 +834,58 @@ def execute_save_final(driver):
     # (5 MouseEvent, no PointerEvent/pointerover) + searched span/a/li for text
     # "Simpan" — WRONG (button is "Ajukan" in a <button>, not "Simpan" in span/a/li).
 
-    # Step 1: click #btnSave icon via clickSeq (by stable id, recurse into iframes)
-    clicked_icon = driver.execute_script("""
-        function clickSeq(el){
-            if (!el) return false;
-            try { el.scrollIntoView({block:'center', inline:'center'}); } catch(e){ try{el.scrollIntoView();}catch(_){} }
-            const init = {bubbles:true, cancelable:true, view:window, button:0, buttons:1, composed:true};
-            const types = ['pointerover','pointerenter','pointerdown','mousedown','pointerup','mouseup','click'];
-            for (const t of types){
+    # Step 1: POLL for #btnSave (up to 5s) — same pattern as DFT print's
+    # _click_print_button #btnPrint poll. The detail toolbar needs time to
+    # render after the import popup closes. Without this poll, Step 1 checks
+    # #btnSave ONCE — if it's not visible at that instant (toolbar still
+    # loading), returns False instantly → save fails (3 retries × ~1s = 3s
+    # total, not enough for toolbar to render).
+    clicked_icon = False
+    end_btn = time.time() + 5
+    while time.time() < end_btn:
+        clicked_icon = driver.execute_script("""
+            function clickSeq(el){
+                if (!el) return false;
+                try { el.scrollIntoView({block:'center', inline:'center'}); } catch(e){ try{el.scrollIntoView();}catch(_){} }
+                const init = {bubbles:true, cancelable:true, view:window, button:0, buttons:1, composed:true};
+                const types = ['pointerover','pointerenter','pointerdown','mousedown','pointerup','mouseup','click'];
+                for (const t of types){
+                    try {
+                        if (t.startsWith('pointer') && typeof PointerEvent !== 'undefined'){
+                            el.dispatchEvent(new PointerEvent(t, Object.assign({}, init, {pointerId:1, pointerType:'mouse', isPrimary:true})));
+                        } else if (!t.startsWith('pointer')){
+                            el.dispatchEvent(new MouseEvent(t, init));
+                        }
+                    } catch(e){}
+                }
+                return true;
+            }
+            function findById(doc, id){
                 try {
-                    if (t.startsWith('pointer') && typeof PointerEvent !== 'undefined'){
-                        el.dispatchEvent(new PointerEvent(t, Object.assign({}, init, {pointerId:1, pointerType:'mouse', isPrimary:true})));
-                    } else if (!t.startsWith('pointer')){
-                        el.dispatchEvent(new MouseEvent(t, init));
+                    const el = doc.getElementById(id);
+                    if (el){
+                        const st = window.getComputedStyle(el);
+                        if (st.display !== 'none' && st.visibility !== 'hidden' && parseFloat(st.opacity) !== 0){
+                            const r = el.getBoundingClientRect();
+                            if (r.width > 0 && r.height > 0) return el;
+                        }
                     }
                 } catch(e){}
-            }
-            return true;
-        }
-        function findById(doc, id){
-            try {
-                const el = doc.getElementById(id);
-                if (el){
-                    const st = window.getComputedStyle(el);
-                    if (st.display !== 'none' && st.visibility !== 'hidden' && parseFloat(st.opacity) !== 0){
-                        const r = el.getBoundingClientRect();
-                        if (r.width > 0 && r.height > 0) return el;
+                try {
+                    const fr = doc.querySelectorAll('iframe, frame');
+                    for (let i=0;i<fr.length;i++){
+                        try { if (fr[i].contentDocument){ const e = findById(fr[i].contentDocument, id); if (e) return e; } } catch(e){}
                     }
-                }
-            } catch(e){}
-            try {
-                const fr = doc.querySelectorAll('iframe, frame');
-                for (let i=0;i<fr.length;i++){
-                    try { if (fr[i].contentDocument){ const e = findById(fr[i].contentDocument, id); if (e) return e; } } catch(e){}
-                }
-            } catch(e){}
-            return null;
-        }
-        const el = findById(document, 'btnSave');
-        if (!el) return false;
-        return clickSeq(el);
-    """)
+                } catch(e){}
+                return null;
+            }
+            const el = findById(document, 'btnSave');
+            if (!el) return false;
+            return clickSeq(el);
+        """)
+        if clicked_icon:
+            break
+        time.sleep(0.3)
     if not clicked_icon:
         return False
 
