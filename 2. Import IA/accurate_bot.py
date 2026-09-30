@@ -994,3 +994,165 @@ def process_single_file(driver, file_path, global_idx, total_files, item, date_s
 
     human_pause(2.0, 3.5)
     return True
+
+
+def recover_after_failure(driver, log):
+    """Recovery after a file fails: close detail tab + open new blank form.
+
+    Prevents cascade failure + data numpuk (stacking). Without this, the failed
+    file's imported data stays in the form → next file fills the SAME dirty form
+    → potential data mixing or Accurate rejection (cascade).
+
+    Flow (recorder confirmed — clicks #1772-#1774):
+      1. Click close-tab button (inside .form-tab-title.active) → close dirty form
+         Button: <button data-bind="...$parent.closeTab(data)"><i class="icon-cancel-2"></i></button>
+      2. Click btnToggleList → ensure list view visible (with btnAdd)
+         Button: <button name="btnToggleList" data-bind="click: toggleList">
+      3. Click btnAdd → open new blank form
+         Button: <button name="btnAdd" data-bind="...click: function(){addNew();}">
+
+    Uses clickSeq (PointerEvent + pointerover/pointerenter, 7 events) — proven
+    reliable for Accurate KO click handlers (same as DFT print + save fix).
+    """
+    log("[RECOVERY] Menutup tab + membuka form baru...")
+
+    # Step 1: close the active detail tab
+    closed = driver.execute_script("""
+        function clickSeq(el){
+            try { el.scrollIntoView({block:'center', inline:'center'}); } catch(e){ try{el.scrollIntoView();}catch(_){} }
+            const init = {bubbles:true, cancelable:true, view:window, button:0, buttons:1, composed:true};
+            const types = ['pointerover','pointerenter','pointerdown','mousedown','pointerup','mouseup','click'];
+            for (const t of types){
+                try {
+                    if (t.startsWith('pointer') && typeof PointerEvent !== 'undefined'){
+                        el.dispatchEvent(new PointerEvent(t, Object.assign({}, init, {pointerId:1, pointerType:'mouse', isPrimary:true})));
+                    } else if (!t.startsWith('pointer')){
+                        el.dispatchEvent(new MouseEvent(t, init));
+                    }
+                } catch(e){}
+            }
+        }
+        function process(doc){
+            try {
+                const activeTab = doc.querySelector('.form-tab-title.active');
+                if (activeTab){
+                    const btn = activeTab.querySelector('button');
+                    if (btn){ clickSeq(btn); return true; }
+                }
+            } catch(e){}
+            try {
+                const btns = doc.querySelectorAll('button');
+                for (const b of btns){
+                    const db = b.getAttribute('data-bind') || '';
+                    if (db.includes('closeTab')){ clickSeq(b); return true; }
+                }
+            } catch(e){}
+            return false;
+        }
+        if (process(document)) return true;
+        try { if (process(window.top.document)) return true; } catch(e) {}
+        try {
+            const fr = document.querySelectorAll('iframe, frame');
+            for (let i=0;i<fr.length;i++){
+                try { if (fr[i].contentDocument && process(fr[i].contentDocument)) return true; } catch(e){}
+            }
+        } catch(e){}
+        return false;
+    """)
+    if closed:
+        log("  ✓ Tab ditutup", "SUCCESS")
+    else:
+        log("  ⚠ Tab tidak ditemukan (mungkin sudah tertutup)", "WARN")
+    time.sleep(1.0)
+
+    # Step 2: toggle to list view (ensure btnAdd visible)
+    toggled = driver.execute_script("""
+        function clickSeq(el){
+            try { el.scrollIntoView({block:'center', inline:'center'}); } catch(e){ try{el.scrollIntoView();}catch(_){} }
+            const init = {bubbles:true, cancelable:true, view:window, button:0, buttons:1, composed:true};
+            const types = ['pointerover','pointerenter','pointerdown','mousedown','pointerup','mouseup','click'];
+            for (const t of types){
+                try {
+                    if (t.startsWith('pointer') && typeof PointerEvent !== 'undefined'){
+                        el.dispatchEvent(new PointerEvent(t, Object.assign({}, init, {pointerId:1, pointerType:'mouse', isPrimary:true})));
+                    } else if (!t.startsWith('pointer')){
+                        el.dispatchEvent(new MouseEvent(t, init));
+                    }
+                } catch(e){}
+            }
+            return true;
+        }
+        function findByName(doc, name){
+            try {
+                const el = doc.querySelector('button[name="' + name + '"]');
+                if (el){
+                    const st = window.getComputedStyle(el);
+                    if (st.display !== 'none' && st.visibility !== 'hidden' && parseFloat(st.opacity) !== 0){
+                        const r = el.getBoundingClientRect();
+                        if (r.width > 0 && r.height > 0) return el;
+                    }
+                }
+            } catch(e){}
+            try {
+                const fr = doc.querySelectorAll('iframe, frame');
+                for (let i=0;i<fr.length;i++){
+                    try { if (fr[i].contentDocument){ const e = findByName(fr[i].contentDocument, name); if (e) return e; } } catch(e){}
+                }
+            } catch(e){}
+            return null;
+        }
+        const el = findByName(document, 'btnToggleList');
+        if (!el) return false;
+        clickSeq(el);
+        return true;
+    """)
+    if toggled:
+        log("  ✓ List view ditampilkan")
+    time.sleep(1.0)
+
+    # Step 3: click "Tambah" (btnAdd) → open new blank form
+    added = driver.execute_script("""
+        function clickSeq(el){
+            try { el.scrollIntoView({block:'center', inline:'center'}); } catch(e){ try{el.scrollIntoView();}catch(_){} }
+            const init = {bubbles:true, cancelable:true, view:window, button:0, buttons:1, composed:true};
+            const types = ['pointerover','pointerenter','pointerdown','mousedown','pointerup','mouseup','click'];
+            for (const t of types){
+                try {
+                    if (t.startsWith('pointer') && typeof PointerEvent !== 'undefined'){
+                        el.dispatchEvent(new PointerEvent(t, Object.assign({}, init, {pointerId:1, pointerType:'mouse', isPrimary:true})));
+                    } else if (!t.startsWith('pointer')){
+                        el.dispatchEvent(new MouseEvent(t, init));
+                    }
+                } catch(e){}
+            }
+            return true;
+        }
+        function findByName(doc, name){
+            try {
+                const el = doc.querySelector('button[name="' + name + '"]');
+                if (el){
+                    const st = window.getComputedStyle(el);
+                    if (st.display !== 'none' && st.visibility !== 'hidden' && parseFloat(st.opacity) !== 0){
+                        const r = el.getBoundingClientRect();
+                        if (r.width > 0 && r.height > 0) return el;
+                    }
+                }
+            } catch(e){}
+            try {
+                const fr = doc.querySelectorAll('iframe, frame');
+                for (let i=0;i<fr.length;i++){
+                    try { if (fr[i].contentDocument){ const e = findByName(fr[i].contentDocument, name); if (e) return e; } } catch(e){}
+                }
+            } catch(e){}
+            return null;
+        }
+        const el = findByName(document, 'btnAdd');
+        if (!el) return false;
+        clickSeq(el);
+        return true;
+    """)
+    if added:
+        log("  ✓ Form baru dibuka", "SUCCESS")
+    else:
+        log("  ⚠ btnAdd tidak ditemukan — form mungkin perlu dibuka manual", "WARN")
+    time.sleep(2.0)  # wait for new form to render

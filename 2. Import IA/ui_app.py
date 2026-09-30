@@ -2348,6 +2348,12 @@ class AutoImportApp(tk.Tk):
                 else:
                     fail_count += 1
                     fail_list.append(p["filename"])
+                    # Recovery: close the dirty tab + open a new blank form →
+                    # prevents cascade failure + data numpuk (stacking). Without
+                    # this, the next file fills the SAME dirty form (failed file's
+                    # imported data still there) → potential data mixing or rejection.
+                    if global_idx < total_files and not self.stop_requested.is_set():
+                        bot.recover_after_failure(driver, self._queue_log)
                 self.ui_queue.put(("progress", global_idx, total_files))
 
                 if self.run_mode == bot.MODE_IMPORT:
