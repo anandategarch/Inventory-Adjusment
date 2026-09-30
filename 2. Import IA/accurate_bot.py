@@ -786,40 +786,119 @@ def execute_save_draft(driver):
 
 
 def execute_save_final(driver):
-    return driver.execute_script("""
-        function triggerClick(el) {
-            if (!el || !el.isConnected) return;
-            el.focus?.();
-            ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(evt => {
-                try { el.dispatchEvent(new MouseEvent(evt, {bubbles:true, cancelable:true, view:window, buttons:1})); } catch(e) {}
-            });
-            if (typeof el.click === 'function') { try { el.click(); } catch(e) {} }
-        }
-        function processDoc(doc) {
-            let toggles = doc.querySelectorAll('.button-dropdown .dropdown-toggle, .dropdown-toggle');
-            toggles.forEach(t => { try { triggerClick(t); } catch(e) {} });
-            let elements = Array.from(doc.querySelectorAll('span, a, li'));
-            let target = elements.find(el => (el.innerText || el.textContent || '').trim() === 'Simpan');
-            if (target) {
-                let targetAnchor = target.closest('a') || target;
-                triggerClick(targetAnchor);
+    # 2-STEP FLOW (recorder confirmed — same pattern as DFT print fix in
+    # unduh_xls_loop.py, proven 40/40 success):
+    #   Step 1: click #btnSave (icon, id="btnSave", icn-navigation-save) in
+    #           detail toolbar (.form-toolbar → .btn-save-group → .tile-content.icon)
+    #           → opens confirmation form with "Ajukan" button
+    #   Step 2: find + click "Ajukan" button (button[name="btnSave"] text="Ajukan",
+    #           data-bind click: function(){submitApprovalDescription();})
+    #           → submits approval → transaction approved
+    #
+    # Uses clickSeq (PointerEvent + pointerover/pointerenter, 7 events) — proven
+    # reliable for Accurate KO click handlers. The OLD code used triggerClick
+    # (5 MouseEvent, no PointerEvent/pointerover) + searched span/a/li for text
+    # "Simpan" — WRONG (button is "Ajukan" in a <button>, not "Simpan" in span/a/li).
+
+    # Step 1: click #btnSave icon via clickSeq (by stable id, recurse into iframes)
+    clicked_icon = driver.execute_script("""
+        function clickSeq(el){
+            if (!el) return false;
+            try { el.scrollIntoView({block:'center', inline:'center'}); } catch(e){ try{el.scrollIntoView();}catch(_){} }
+            const init = {bubbles:true, cancelable:true, view:window, button:0, buttons:1, composed:true};
+            const types = ['pointerover','pointerenter','pointerdown','mousedown','pointerup','mouseup','click'];
+            for (const t of types){
                 try {
-                    let win = doc.defaultView || window;
-                    if (win.ko && win.ko.dataFor) {
-                        let data = win.ko.dataFor(targetAnchor);
-                        if (data && typeof data.click === 'function') data.click();
+                    if (t.startsWith('pointer') && typeof PointerEvent !== 'undefined'){
+                        el.dispatchEvent(new PointerEvent(t, Object.assign({}, init, {pointerId:1, pointerType:'mouse', isPrimary:true})));
+                    } else if (!t.startsWith('pointer')){
+                        el.dispatchEvent(new MouseEvent(t, init));
                     }
-                } catch(e) {}
-                return true;
+                } catch(e){}
             }
-            return false;
+            return true;
         }
-        if (processDoc(document)) return true;
-        try { if (processDoc(window.top.document)) return true; } catch(e) {}
-        let iframes = document.querySelectorAll('iframe');
-        for (let f of iframes) { try { if (f.contentDocument && processDoc(f.contentDocument)) return true; } catch(e) {} }
-        return false;
+        function findById(doc, id){
+            try {
+                const el = doc.getElementById(id);
+                if (el){
+                    const st = window.getComputedStyle(el);
+                    if (st.display !== 'none' && st.visibility !== 'hidden' && parseFloat(st.opacity) !== 0){
+                        const r = el.getBoundingClientRect();
+                        if (r.width > 0 && r.height > 0) return el;
+                    }
+                }
+            } catch(e){}
+            try {
+                const fr = doc.querySelectorAll('iframe, frame');
+                for (let i=0;i<fr.length;i++){
+                    try { if (fr[i].contentDocument){ const e = findById(fr[i].contentDocument, id); if (e) return e; } } catch(e){}
+                }
+            } catch(e){}
+            return null;
+        }
+        const el = findById(document, 'btnSave');
+        if (!el) return false;
+        return clickSeq(el);
     """)
+    if not clicked_icon:
+        return False
+
+    # Step 2: poll for "Ajukan" button (up to 8s). Click via clickSeq + KO fallback.
+    end = time.time() + 8
+    while time.time() < end:
+        clicked_ajukan = driver.execute_script("""
+            function clickSeq(el){
+                try { el.scrollIntoView({block:'center', inline:'center'}); } catch(e){ try{el.scrollIntoView();}catch(_){} }
+                const init = {bubbles:true, cancelable:true, view:window, button:0, buttons:1, composed:true};
+                const types = ['pointerover','pointerenter','pointerdown','mousedown','pointerup','mouseup','click'];
+                for (const t of types){
+                    try {
+                        if (t.startsWith('pointer') && typeof PointerEvent !== 'undefined'){
+                            el.dispatchEvent(new PointerEvent(t, Object.assign({}, init, {pointerId:1, pointerType:'mouse', isPrimary:true})));
+                        } else if (!t.startsWith('pointer')){
+                            el.dispatchEvent(new MouseEvent(t, init));
+                        }
+                    } catch(e){}
+                }
+            }
+            function findByText(doc, want, maxLen){
+                try {
+                    const buttons = doc.querySelectorAll('button, a, [role="button"]');
+                    for (const el of buttons){
+                        const st = window.getComputedStyle(el);
+                        if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) continue;
+                        const r = el.getBoundingClientRect();
+                        if (r.width === 0 || r.height === 0) continue;
+                        const t = (el.innerText || el.textContent || '').trim().toUpperCase();
+                        if (!t || t.length > maxLen) continue;
+                        if (t === want || t.indexOf(want) !== -1) return el;
+                    }
+                } catch(e){}
+                try {
+                    const fr = doc.querySelectorAll('iframe, frame');
+                    for (let i=0;i<fr.length;i++){
+                        try { if (fr[i].contentDocument){ const e = findByText(fr[i].contentDocument, want, maxLen); if (e) return e; } } catch(e){}
+                    }
+                } catch(e){}
+                return null;
+            }
+            const el = findByText(document, 'AJUKAN', 20);
+            if (!el) return false;
+            clickSeq(el);
+            try {
+                const win = el.ownerDocument.defaultView || window;
+                if (win.ko && win.ko.dataFor){
+                    const data = win.ko.dataFor(el);
+                    if (data && typeof data.click === 'function') data.click();
+                }
+            } catch(e){}
+            return true;
+        """)
+        if clicked_ajukan:
+            return True
+        time.sleep(0.3)
+    return False
 
 
 # ============================================================
