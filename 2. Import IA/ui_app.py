@@ -2192,12 +2192,16 @@ class AutoImportApp(tk.Tk):
                 messagebox.showwarning("Set Manual", "COA dan Keterangan harus diisi.", parent=dlg)
                 return
             if apply_global.get() and keyword:
-                # Global: create memo_template (replace source branch with {BRANCH})
-                memo_template = ket
-                if branch and branch.upper() in memo_template.upper():
-                    # Replace the source branch with {BRANCH} (case-insensitive)
-                    import re as _re
-                    memo_template = _re.sub(_re.escape(branch), "{BRANCH}", memo_template, flags=_re.IGNORECASE)
+                # Global: create memo_template — use regex \b[A-Z]{6}\b to find
+                # ANY 6-uppercase-letter word (resto code pattern) in the keterangan
+                # and replace with {BRANCH}. This recognizes the resto code
+                # regardless of which file was right-clicked (doesn't depend on
+                # the source file's branch matching the keterangan).
+                # All resto codes are 6 uppercase letters (PWKTAM, SBRTUP, BDGUKU, etc.)
+                # Common words don't match: SEPTEMBER(8), DEVIASI(7), ADJUSTMENT(mixed), STOCK(5)
+                import re as _re
+                memo_template = _re.sub(r'\b[A-Z]{6}\b', '{BRANCH}', ket)
+                # If no 6-letter code found, use keterangan as-is (no {BRANCH})
                 # Store in manual_mappings
                 self.manual_mappings[keyword.upper()] = {
                     "coa": coa,
@@ -2206,7 +2210,9 @@ class AutoImportApp(tk.Tk):
                 self._save_manual_mappings()
                 # Rebuild plan (applies the mapping to ALL files with that keyword)
                 self._rebuild_plan()
-                self.log(f"Global manual override: keyword='{keyword}' → COA={coa}, template={memo_template[:50]}", "INFO")
+                has_branch = "{BRANCH}" in memo_template
+                self.log(f"Global manual override: keyword='{keyword}' → COA={coa}, template={memo_template[:60]}" +
+                         (" (branch auto-substitute)" if has_branch else " (no branch pattern found)"), "INFO")
             else:
                 # Per-file only
                 plan_item["coa"] = coa
