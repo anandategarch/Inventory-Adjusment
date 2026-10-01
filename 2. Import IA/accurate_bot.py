@@ -266,7 +266,7 @@ def match_file(db_map, base, keyword, branch):
 
 def build_file_plan(db_map, files, skip_keywords=None):
     plan = []
-    skip_set = skip_keywords if skip_keywords else FILE_SKIP_KEYWORDS
+    skip_set = skip_keywords if skip_keywords is not None else FILE_SKIP_KEYWORDS
     for path in files:
         fn = os.path.basename(path)
         keyword, branch, base = parse_file_info(fn)
