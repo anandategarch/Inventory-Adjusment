@@ -2192,15 +2192,16 @@ class AutoImportApp(tk.Tk):
                 messagebox.showwarning("Set Manual", "COA dan Keterangan harus diisi.", parent=dlg)
                 return
             if apply_global.get() and keyword:
-                # Global: create memo_template — use regex \b[A-Z]{6}\b to find
-                # ANY 6-uppercase-letter word (resto code pattern) in the keterangan
-                # and replace with {BRANCH}. This recognizes the resto code
-                # regardless of which file was right-clicked (doesn't depend on
-                # the source file's branch matching the keterangan).
-                # All resto codes are 6 uppercase letters (PWKTAM, SBRTUP, BDGUKU, etc.)
-                # Common words don't match: SEPTEMBER(8), DEVIASI(7), ADJUSTMENT(mixed), STOCK(5)
+                # Global: create memo_template — use regex to find ANY
+                # 6-uppercase-letter word (resto code) in the keterangan and
+                # replace with {BRANCH}. Pattern: (?<![A-Z])[A-Z]{6}(?![A-Z])
+                # — 6 consecutive A-Z, NOT preceded/followed by A-Z.
+                # \b doesn't work (underscore _ is a \w char, so _BDGUKU_ has
+                # no word boundary). Lookbehind/lookahead avoids this.
+                # All resto codes are 6 caps (PWKTAM, SBRTUP, BDGUKU, etc).
+                # Non-matches: SEPTEMBER(9), DEVIASI(7), ADJUSTMENT(10), STOCK(5)
                 import re as _re
-                memo_template = _re.sub(r'\b[A-Z]{6}\b', '{BRANCH}', ket)
+                memo_template = _re.sub(r'(?<![A-Z])[A-Z]{6}(?![A-Z])', '{BRANCH}', ket)
                 # If no 6-letter code found, use keterangan as-is (no {BRANCH})
                 # Store in manual_mappings
                 self.manual_mappings[keyword.upper()] = {
