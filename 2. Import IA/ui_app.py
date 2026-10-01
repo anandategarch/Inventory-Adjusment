@@ -681,6 +681,11 @@ class AutoImportApp(tk.Tk):
         self.tree.tag_configure("TIDAK COCOK", foreground="#dc2626")
         self.tree.tag_configure("MENUNGGU DB", foreground="#b45309")
 
+        # Right-click context menu for manual COA + Keterangan override
+        self.tree_ctx_menu = tk.Menu(self.tree, tearoff=0)
+        self.tree_ctx_menu.add_command(label="✏  Set COA & Keterangan Manual", command=self._set_manual_coa_ket)
+        self.tree.bind("<Button-3>", self._show_tree_ctx_menu)
+
         # ================= TAB DATABASE =================
         dbview = ttk.Frame(tab_db, style="TFrame")
         dbview.pack(fill="both", expand=True, padx=18, pady=16)
@@ -2078,6 +2083,110 @@ class AutoImportApp(tk.Tk):
             self.match_lbl.configure(text=txt,
                                      fg="#15803d" if (ok and not bad) else ("#dc2626" if bad else "#b45309"))
 
+        self.folder_summary.configure(
+            text=f"Folder : {len(self.folders)}\n"
+                 f"File      : {len(self.files)}\n"
+                 f"Siap     : {ok}\n"
+                 f"Dilewati : {skip}\n"
+                 f"Tidak cocok : {bad}")
+
+    def _show_tree_ctx_menu(self, event):
+        """Show right-click context menu on the preview tree."""
+        row_id = self.tree.identify_row(event.y)
+        if row_id:
+            self.tree.selection_set(row_id)
+            self.tree_ctx_menu.tk_popup(event.x_root, event.y_root)
+
+    def _set_manual_coa_ket(self):
+        """Dialog to manually set COA + Keterangan for a file (override database match)."""
+        sel = self.tree.selection()
+        if not sel:
+            return
+        values = self.tree.item(sel[0], "values")
+        if not values:
+            return
+        # values = [no, folder, file, cabang, coa, ket, status]
+        no = int(values[0])
+        if no < 1 or no > len(self.plan):
+            return
+        plan_item = self.plan[no - 1]
+        filename = plan_item["filename"]
+
+        # Dialog
+        dlg = tk.Toplevel(self)
+        dlg.title("Set COA & Keterangan Manual")
+        dlg.geometry("560x220")
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.resizable(True, False)
+
+        tk.Label(dlg, text=f"File: {filename}", font=(_FONT, 10, "bold"),
+                 fg="#334155").grid(row=0, column=0, columnspan=2, padx=14, pady=(14, 6), sticky="w")
+
+        tk.Label(dlg, text="COA:").grid(row=1, column=0, padx=(14, 6), pady=6, sticky="e")
+        coa_entry = ttk.Entry(dlg, width=35)
+        coa_entry.grid(row=1, column=1, padx=6, pady=6, sticky="ew")
+        coa_entry.insert(0, plan_item.get("coa") or "")
+        coa_entry.focus_set()
+
+        tk.Label(dlg, text="Keterangan:").grid(row=2, column=0, padx=(14, 6), pady=6, sticky="e")
+        ket_entry = ttk.Entry(dlg, width=50)
+        ket_entry.grid(row=2, column=1, padx=6, pady=6, sticky="ew")
+        ket_entry.insert(0, plan_item.get("memo") or "")
+
+        tk.Label(dlg, text="Catatan: override ini akan hilang jika folder di-scan ulang.",
+                 fg="#94a3b8", font=(_FONT, 8)).grid(row=3, column=0, columnspan=2, padx=14, pady=(4, 6), sticky="w")
+
+        dlg.columnconfigure(1, weight=1)
+
+        def on_ok():
+            coa = coa_entry.get().strip()
+            ket = ket_entry.get().strip()
+            if not coa or not ket:
+                messagebox.showwarning("Set Manual", "COA dan Keterangan harus diisi.", parent=dlg)
+                return
+            # Update plan item
+            plan_item["coa"] = coa
+            plan_item["memo"] = ket
+            plan_item["status"] = "OK"
+            plan_item["reason"] = "MANUAL"
+            # Update tree row directly (not _rebuild_plan — that would lose the override)
+            self.tree.item(sel[0], tags=("OK",), values=(
+                no, plan_item["folder"], plan_item["filename"],
+                plan_item["branch"] or "-",
+                coa, ket[:70], "OK (MANUAL)"))
+            # Update match label counts
+            self._update_match_label()
+            dlg.destroy()
+            self.log(f"Manual override: {filename} → COA={coa}, Ket={ket[:50]}", "INFO")
+
+        def on_cancel():
+            dlg.destroy()
+
+        btn_row = tk.Frame(dlg)
+        btn_row.grid(row=4, column=0, columnspan=2, pady=(6, 14))
+        ttk.Button(btn_row, text="OK", command=on_ok).pack(side="left", padx=5)
+        ttk.Button(btn_row, text="Batal", command=on_cancel).pack(side="left", padx=5)
+        dlg.bind("<Return>", lambda e: on_ok())
+        dlg.bind("<Escape>", lambda e: on_cancel())
+
+    def _update_match_label(self):
+        """Re-count plan statuses + update the match label (without rebuilding plan)."""
+        counts = {}
+        for p in self.plan:
+            counts[p["status"]] = counts.get(p["status"], 0) + 1
+        ok = counts.get("OK", 0)
+        skip = counts.get("DILEWATI", 0)
+        bad = counts.get("TIDAK COCOK", 0)
+        wait = counts.get("MENUNGGU DB", 0)
+        if not self.plan:
+            self.match_lbl.configure(text="Belum ada data.", fg="#475569")
+        else:
+            txt = f"Cocok: {ok}   |   Dilewati: {skip}   |   Tidak Cocok: {bad}"
+            if wait:
+                txt += f"   |   Menunggu DB: {wait}"
+            self.match_lbl.configure(text=txt,
+                                     fg="#15803d" if (ok and not bad) else ("#dc2626" if bad else "#b45309"))
         self.folder_summary.configure(
             text=f"Folder : {len(self.folders)}\n"
                  f"File      : {len(self.files)}\n"
