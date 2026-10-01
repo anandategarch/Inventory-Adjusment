@@ -453,6 +453,8 @@ class AutoImportApp(tk.Tk):
         self.db_meta = {}
         self.root_folder = ""
         self.folders, self.files, self.plan = [], [], []
+        self.manual_mappings = {}  # keyword -> {coa, memo_template} — persists across re-scans
+        self._load_manual_mappings()  # load from manual_mapping.json
         self.stop_requested = threading.Event()
         self.ui_queue = queue.Queue()
         self.running, self.worker_thread = False, None
@@ -2058,6 +2060,16 @@ class AutoImportApp(tk.Tk):
         raw_kw = self.skip_keywords_var.get().strip()
         skip_kw = tuple(s.strip().upper() for s in raw_kw.split(",") if s.strip()) if raw_kw else ()
         self.plan = bot.build_file_plan(self.db_map, self.files, skip_keywords=skip_kw)
+        # Apply manual mappings (global overrides — keyword → COA + keterangan template)
+        for p in self.plan:
+            kw = (p.get("keyword") or "").upper()
+            if kw in self.manual_mappings:
+                m = self.manual_mappings[kw]
+                p["coa"] = m["coa"]
+                branch = p.get("branch") or ""
+                p["memo"] = m["memo_template"].replace("{BRANCH}", branch)
+                p["status"] = "OK"
+                p["reason"] = "MANUAL"
         for item in self.tree.get_children():
             self.tree.delete(item)
         counts = {}
@@ -2065,9 +2077,10 @@ class AutoImportApp(tk.Tk):
         for p in self.plan:
             counts[p["status"]] = counts.get(p["status"], 0) + 1
             ket_display = (p["memo"] or "-")[:70] if p["status"] == "OK" else p["reason"]
+            status_display = "OK (MANUAL)" if p.get("reason") == "MANUAL" else p["status"]
             self.tree.insert("", "end", tags=(p["status"],), values=(
                 no, p["folder"], p["filename"], p["branch"] or "-",
-                p["coa"] or "-", ket_display, p["status"]))
+                p["coa"] or "-", ket_display, status_display))
             no += 1
         ok = counts.get("OK", 0)
         skip = counts.get("DILEWATI", 0)
@@ -2090,6 +2103,27 @@ class AutoImportApp(tk.Tk):
                  f"Dilewati : {skip}\n"
                  f"Tidak cocok : {bad}")
 
+    def _load_manual_mappings(self):
+        """Load manual mappings from manual_mapping.json (persists across re-scans)."""
+        try:
+            import json
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "manual_mapping.json")
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    self.manual_mappings = json.load(f)
+        except Exception:
+            self.manual_mappings = {}
+
+    def _save_manual_mappings(self):
+        """Save manual mappings to manual_mapping.json."""
+        try:
+            import json
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "manual_mapping.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self.manual_mappings, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+
     def _show_tree_ctx_menu(self, event):
         """Show right-click context menu on the preview tree."""
         row_id = self.tree.identify_row(event.y)
@@ -2098,24 +2132,26 @@ class AutoImportApp(tk.Tk):
             self.tree_ctx_menu.tk_popup(event.x_root, event.y_root)
 
     def _set_manual_coa_ket(self):
-        """Dialog to manually set COA + Keterangan for a file (override database match)."""
+        """Dialog to manually set COA + Keterangan for a file (override database match).
+        Option to apply globally (all files with same keyword + branch auto-substitute)."""
         sel = self.tree.selection()
         if not sel:
             return
         values = self.tree.item(sel[0], "values")
         if not values:
             return
-        # values = [no, folder, file, cabang, coa, ket, status]
         no = int(values[0])
         if no < 1 or no > len(self.plan):
             return
         plan_item = self.plan[no - 1]
         filename = plan_item["filename"]
+        keyword = plan_item.get("keyword") or ""
+        branch = plan_item.get("branch") or ""
 
         # Dialog
         dlg = tk.Toplevel(self)
         dlg.title("Set COA & Keterangan Manual")
-        dlg.geometry("560x220")
+        dlg.geometry("600x280")
         dlg.transient(self)
         dlg.grab_set()
         dlg.resizable(True, False)
@@ -2134,8 +2170,18 @@ class AutoImportApp(tk.Tk):
         ket_entry.grid(row=2, column=1, padx=6, pady=6, sticky="ew")
         ket_entry.insert(0, plan_item.get("memo") or "")
 
-        tk.Label(dlg, text="Catatan: override ini akan hilang jika folder di-scan ulang.",
-                 fg="#94a3b8", font=(_FONT, 8)).grid(row=3, column=0, columnspan=2, padx=14, pady=(4, 6), sticky="w")
+        # Checkbox: apply to ALL files with same keyword (global + persist)
+        apply_global = tk.BooleanVar(value=bool(keyword))
+        cb_frame = tk.Frame(dlg)
+        cb_frame.grid(row=3, column=0, columnspan=2, padx=14, pady=(4, 2), sticky="w")
+        cb = ttk.Checkbutton(cb_frame, text=f"Apply to ALL files dengan keyword '{keyword}'",
+                             variable=apply_global)
+        cb.pack(side="left")
+        tk.Label(cb_frame, text="(branch auto-substitute, tersimpan permanen)", fg="#94a3b8",
+                 font=(_FONT, 8)).pack(side="left", padx=(6, 0))
+
+        tk.Label(dlg, text="Catatan: kalau dicentang → tersimpan di manual_mapping.json (tidak hilang saat re-scan).",
+                 fg="#94a3b8", font=(_FONT, 8)).grid(row=4, column=0, columnspan=2, padx=14, pady=(2, 6), sticky="w")
 
         dlg.columnconfigure(1, weight=1)
 
@@ -2145,26 +2191,41 @@ class AutoImportApp(tk.Tk):
             if not coa or not ket:
                 messagebox.showwarning("Set Manual", "COA dan Keterangan harus diisi.", parent=dlg)
                 return
-            # Update plan item
-            plan_item["coa"] = coa
-            plan_item["memo"] = ket
-            plan_item["status"] = "OK"
-            plan_item["reason"] = "MANUAL"
-            # Update tree row directly (not _rebuild_plan — that would lose the override)
-            self.tree.item(sel[0], tags=("OK",), values=(
-                no, plan_item["folder"], plan_item["filename"],
-                plan_item["branch"] or "-",
-                coa, ket[:70], "OK (MANUAL)"))
-            # Update match label counts
-            self._update_match_label()
+            if apply_global.get() and keyword:
+                # Global: create memo_template (replace source branch with {BRANCH})
+                memo_template = ket
+                if branch and branch.upper() in memo_template.upper():
+                    # Replace the source branch with {BRANCH} (case-insensitive)
+                    import re as _re
+                    memo_template = _re.sub(_re.escape(branch), "{BRANCH}", memo_template, flags=_re.IGNORECASE)
+                # Store in manual_mappings
+                self.manual_mappings[keyword.upper()] = {
+                    "coa": coa,
+                    "memo_template": memo_template
+                }
+                self._save_manual_mappings()
+                # Rebuild plan (applies the mapping to ALL files with that keyword)
+                self._rebuild_plan()
+                self.log(f"Global manual override: keyword='{keyword}' → COA={coa}, template={memo_template[:50]}", "INFO")
+            else:
+                # Per-file only
+                plan_item["coa"] = coa
+                plan_item["memo"] = ket
+                plan_item["status"] = "OK"
+                plan_item["reason"] = "MANUAL"
+                self.tree.item(sel[0], tags=("OK",), values=(
+                    no, plan_item["folder"], plan_item["filename"],
+                    plan_item["branch"] or "-",
+                    coa, ket[:70], "OK (MANUAL)"))
+                self._update_match_label()
+                self.log(f"Manual override: {filename} → COA={coa}, Ket={ket[:50]}", "INFO")
             dlg.destroy()
-            self.log(f"Manual override: {filename} → COA={coa}, Ket={ket[:50]}", "INFO")
 
         def on_cancel():
             dlg.destroy()
 
         btn_row = tk.Frame(dlg)
-        btn_row.grid(row=4, column=0, columnspan=2, pady=(6, 14))
+        btn_row.grid(row=5, column=0, columnspan=2, pady=(6, 14))
         ttk.Button(btn_row, text="OK", command=on_ok).pack(side="left", padx=5)
         ttk.Button(btn_row, text="Batal", command=on_cancel).pack(side="left", padx=5)
         dlg.bind("<Return>", lambda e: on_ok())
