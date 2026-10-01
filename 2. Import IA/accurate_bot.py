@@ -24,7 +24,7 @@ MODE_APPROVE = "APPROVE"
 MODE_DRAFT = "DRAFT"
 MODE_IMPORT = "HANYA_IMPORT"
 
-FILE_SKIP_KEYWORDS = ("RAW MATERIAL", "DEVIASI", "ADJUSTMENT STOCK")
+FILE_SKIP_KEYWORDS = ("RAW MATERIAL", "DEVIASI")  # default — user can override via UI
 
 FILE_KEYWORD_TO_MEMO_PREFIX = {
     "BEBAN ATK": "BEBAN ATK",
@@ -264,8 +264,9 @@ def match_file(db_map, base, keyword, branch):
     return None, None, f"kata kunci '{keyword}' tidak dikenal"
 
 
-def build_file_plan(db_map, files):
+def build_file_plan(db_map, files, skip_keywords=None):
     plan = []
+    skip_set = skip_keywords if skip_keywords else FILE_SKIP_KEYWORDS
     for path in files:
         fn = os.path.basename(path)
         keyword, branch, base = parse_file_info(fn)
@@ -273,9 +274,9 @@ def build_file_plan(db_map, files):
         base_item = {"path": path, "folder": folder_rel, "filename": fn,
                      "keyword": keyword, "branch": branch}
 
-        if any(s in norm(base) for s in FILE_SKIP_KEYWORDS):
+        if any(s in norm(base) for s in skip_set):
             plan.append({**base_item, "coa": "", "memo": "", "status": "DILEWATI",
-                         "reason": "masuk daftar skip (Raw Material/Deviasi/Adjustment)"})
+                         "reason": f"masuk daftar skip ({', '.join(skip_set)})"})
             continue
         if not db_map:
             plan.append({**base_item, "coa": "", "memo": "", "status": "MENUNGGU DB",

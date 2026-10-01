@@ -616,6 +616,18 @@ class AutoImportApp(tk.Tk):
         mode_card = self._card(body, "5. Mode Penyimpanan")
         mode_card.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=18, pady=(0, 8))
         mode_card.columnconfigure(0, weight=1)
+
+        # Skip keywords field (user-editable exclusion list)
+        skip_row = tk.Frame(mode_card, bg=C_CARD)
+        skip_row.grid(row=0, column=0, sticky="ew", padx=14, pady=(10, 4))
+        tk.Label(skip_row, text="Kata Pengecualian:", bg=C_CARD, fg="#64748b", font=F_BODY).pack(side="left", padx=(0, 6))
+        self.skip_keywords_var = tk.StringVar(value="Raw Material, Deviasi")
+        skip_entry = ttk.Entry(skip_row, textvariable=self.skip_keywords_var, width=45)
+        skip_entry.pack(side="left", padx=(0, 6))
+        skip_entry.bind("<Return>", lambda e: self._rebuild_plan())
+        skip_entry.bind("<FocusOut>", lambda e: self._rebuild_plan())
+        tk.Label(skip_row, text="(file yang mengandung kata ini akan dilewati — pisahkan koma)", bg=C_CARD, fg="#94a3b8", font=(_FONT, 8)).pack(side="left")
+
         btn_row = tk.Frame(mode_card, bg=C_CARD)
         btn_row.grid(row=1, column=0, sticky="ew", padx=14, pady=(4, 10))
         self.start_approve_btn = ttk.Button(btn_row, text="▶  Simpan Approve", style="Success.TButton",
@@ -2037,7 +2049,10 @@ class AutoImportApp(tk.Tk):
         self._rebuild_plan()
 
     def _rebuild_plan(self):
-        self.plan = bot.build_file_plan(self.db_map, self.files)
+        # Parse user's skip keywords (comma-separated, uppercased)
+        raw_kw = self.skip_keywords_var.get().strip()
+        skip_kw = tuple(s.strip().upper() for s in raw_kw.split(",") if s.strip()) if raw_kw else ()
+        self.plan = bot.build_file_plan(self.db_map, self.files, skip_keywords=skip_kw)
         for item in self.tree.get_children():
             self.tree.delete(item)
         counts = {}
