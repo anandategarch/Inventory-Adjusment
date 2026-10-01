@@ -985,7 +985,7 @@ def process_single_file(driver, file_path, global_idx, total_files, item, date_s
         return False
 
     log("[4/5] Menunggu konfirmasi hasil impor")
-    popup_eval = wait_import_result(driver, timeout=45, log=log)
+    popup_eval = wait_import_result(driver, timeout=90, log=log)
     if popup_eval is None:
         log("Pop-up hasil impor tidak muncul sampai batas waktu -> file dilewati.", "ERROR")
         return False
