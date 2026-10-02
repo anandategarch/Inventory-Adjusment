@@ -1652,14 +1652,17 @@ class AutoImportApp(tk.Tk):
             self.ss_output_var.set(folder)
 
     def _ss_open_output(self):
-        """Open output folder in OS file explorer."""
+        """Open output folder in OS file explorer. Creates folder if not exists."""
         folder = self.ss_output_var.get().strip()
-        if not folder or not os.path.isdir(folder):
-            messagebox.showwarning(
-                APP_TITLE,
-                "Folder output tidak ada.\nMulai screenshot dulu, folder dibuat otomatis.",
-                parent=self)
+        if not folder:
+            messagebox.showwarning(APP_TITLE, "Folder output belum diatur.", parent=self)
             return
+        if not os.path.isdir(folder):
+            try:
+                os.makedirs(folder, exist_ok=True)
+            except Exception as e:
+                messagebox.showwarning(APP_TITLE, f"Tidak bisa membuat folder output:\n{folder}\n{e}", parent=self)
+                return
         try:
             if sys.platform == "win32":
                 try:

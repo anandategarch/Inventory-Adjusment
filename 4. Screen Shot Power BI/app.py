@@ -146,10 +146,10 @@ class Engine:
             safe = re.sub(r'[^A-Za-z0-9_.-]+', '_', label)
             path = debug_dir / f'debug_{safe}_{int(time.time())}.png'
             page.screenshot(path=str(path), type='png')
-            self.log(f'   🧪 Debug screenshot: _debug/{path.name}')
+            self.log(f'   Debug: Debug screenshot: _debug/{path.name}')
             return path
         except Exception as e:
-            self.log(f'   ⚠️ Gagal membuat debug screenshot: {e}')
+            self.log(f'   WARN: Gagal membuat debug screenshot: {e}')
             return None
 
     def _page_output_dir(self, page_number):
@@ -207,8 +207,8 @@ class Engine:
                     if pdf_path.exists():
                         pdf_path.unlink()
                 except Exception as e:
-                    self.log(f'   ⚠️ PNG baru sudah tersimpan, tetapi PDF lama tidak terhapus: {e}')
-                self.log(f'   📁 Output: Page {page_number}/{png_path.name}')
+                    self.log(f'   WARN: PNG baru sudah tersimpan, tetapi PDF lama tidak terhapus: {e}')
+                self.log(f'   Output: Page {page_number}/{png_path.name}')
                 return png_path
 
             try:
@@ -228,8 +228,8 @@ class Engine:
                 if png_path.exists():
                     png_path.unlink()
             except Exception as e:
-                self.log(f'   ⚠️ PDF baru sudah tersimpan, tetapi PNG lama tidak terhapus: {e}')
-            self.log(f'   📁 Output: Page {page_number}/{pdf_path.name}')
+                self.log(f'   WARN: PDF baru sudah tersimpan, tetapi PNG lama tidak terhapus: {e}')
+            self.log(f'   Output: Page {page_number}/{pdf_path.name}')
             return pdf_path
         except Exception as e:
             raise RuntimeError(
@@ -333,7 +333,7 @@ class Engine:
             page.wait_for_timeout(int(CONFIG.get('wait_clear_search_ms', 200)))
             page.keyboard.type(value, delay=60)        # V14: 80 -> V15: 60
         else:
-            self.log("   ↪ Input pencarian Resto tidak ditemukan; mencoba keyboard langsung")
+            self.log("   Input pencarian Resto tidak ditemukan; mencoba keyboard langsung")
             page.keyboard.type(value, delay=60)
 
         page.wait_for_timeout(int(CONFIG.get('wait_after_search_ms', 900)))
@@ -517,14 +517,14 @@ class Engine:
         last_sig = None
         stable_cycles = 0
         if reason:
-            self.log(f'   ⏳ Menunggu Power BI stabil ({reason})...')
+            self.log(f'   Menunggu Power BI stabil ({reason})...')
         while True:
             if self._is_stop():
-                self.log('   ⏹ Stability wait dihentikan oleh pengguna.')
+                self.log('   Stability wait dihentikan oleh pengguna.')
                 return None
             elapsed_ms = int((time.monotonic()-started)*1000)
             if elapsed_ms >= timeout_ms:
-                self.log(f'   ⚠️ Timeout stability setelah {elapsed_ms/1000:.1f}s.')
+                self.log(f'   WARN: Timeout stability setelah {elapsed_ms/1000:.1f}s.')
                 return None
             time.sleep(poll_ms/1000)
             if self._is_stop():
@@ -545,7 +545,7 @@ class Engine:
                 stable_cycles = 0
             last_sig = sig
             if stable_now and elapsed_ms >= min_wait_ms and stable_cycles >= required_cycles:
-                self.log(f'   ✅ Report stabil ({stable_cycles} siklus berturut-turut, {elapsed_ms/1000:.1f}s).')
+                self.log(f'   Report stabil ({stable_cycles} siklus berturut-turut, {elapsed_ms/1000:.1f}s).')
                 return sig
         # Unreachable
 
@@ -677,14 +677,14 @@ class Engine:
         except Exception as e:
             if not use_force_fallback:
                 raise
-            self.log(f'   ⚠️ Normal click Next Page timeout ({click_timeout}ms); mencoba force click...')
+            self.log(f'   WARN: Normal click Next Page timeout ({click_timeout}ms); mencoba force click...')
 
         # Tier 2: force click (skip actionability checks).
         try:
             next_btn.click(timeout=force_timeout, force=True)
             return 'force'
         except Exception as e:
-            self.log(f'   ⚠️ Force click juga gagal ({e}); mencoba dispatch_event...')
+            self.log(f'   WARN: Force click juga gagal ({e}); mencoba dispatch_event...')
 
         # Tier 3: synthetic click event via JS.
         try:
@@ -708,7 +708,7 @@ class Engine:
             pass
         method = self._click_next_button(next_btn)
         if method != 'normal':
-            self.log(f'   ↪ Next Page diklik via metode: {method}')
+            self.log(f'   Next Page diklik via metode: {method}')
 
         timeout_ms = int(CONFIG.get('page_navigation_step_timeout_ms', 12000))
         started = time.monotonic()
@@ -744,7 +744,7 @@ class Engine:
         target = int(page_number)
         if target < 1:
             raise ValueError('Nomor page harus >= 1.')
-        self.log(f'   🔄 Reset report → navigasi ke Page {target}...')
+        self.log(f'   Reset report -> navigasi ke Page {target}...')
         self._invalidate_page_cache()
         page.goto(CONFIG['powerbi_url'], wait_until='domcontentloaded',
                   timeout=int(CONFIG['navigation_timeout_ms']))
@@ -756,20 +756,20 @@ class Engine:
         try:
             page.wait_for_load_state('networkidle', timeout=15000)
         except Exception:
-            self.log('   ⚠️ Network idle tidak tercapai; menggunakan stability gate.')
+            self.log('   WARN: Network idle tidak tercapai; menggunakan stability gate.')
         if not self._wait_after_page_navigation(page, 1):
             raise RuntimeError('Report awal belum stabil setelah reset.')
 
         detected = self._get_current_page_number(page, use_cache=True)
         if detected not in (None, 1):
-            self.log(f'   ⚠️ Report awal terbaca Page {detected}; tetap gunakan fresh navigation.')
+            self.log(f'   WARN: Report awal terbaca Page {detected}; tetap gunakan fresh navigation.')
             detected = None
             self._cached_page_number = None
         if target == 1:
             if detected == 1:
-                self.log('   ✅ Page 1 terverifikasi.')
+                self.log('   Page 1 terverifikasi.')
             else:
-                self.log('   ⚠️ Identitas Page 1 tidak terekspos oleh DOM; state awal stabil akan digunakan.')
+                self.log('   WARN: Identitas Page 1 tidak terekspos oleh DOM; state awal stabil akan digunakan.')
             return True
 
         for next_page in range(2, target + 1):
@@ -786,9 +786,9 @@ class Engine:
         if final_identity is not None and final_identity != target:
             raise RuntimeError(f'Verifikasi final gagal: terbaca Page {final_identity}, target Page {target}.')
         if final_identity is None:
-            self.log(f'   ⚠️ Page {target} stabil tetapi nomor page tidak terekspos oleh DOM; transisi telah diverifikasi.')
+            self.log(f'   WARN: Page {target} stabil tetapi nomor page tidak terekspos oleh DOM; transisi telah diverifikasi.')
         else:
-            self.log(f'   ✅ Page {target} terverifikasi.')
+            self.log(f'   Page {target} terverifikasi.')
         return True
 
     def _advance_to_next_page(self, page, from_page, to_page):
@@ -804,7 +804,7 @@ class Engine:
             # Should not happen (caller ensures ascending order); fall back.
             return self._navigate_to_page(page, to_page)
 
-        self.log(f'   ⏩ Advance Page {from_page} → {to_page} ({diff}x Next)...')
+        self.log(f'   Advance Page {from_page} -> {to_page} ({diff}x Next)...')
         self._invalidate_page_cache()
         detected = self._get_current_page_number(page, use_cache=True)
         for step in range(1, diff + 1):
@@ -822,16 +822,16 @@ class Engine:
         if final_identity is not None and final_identity != to_page:
             raise RuntimeError(f'Verifikasi final gagal: terbaca Page {final_identity}, target Page {to_page}.')
         if final_identity is None:
-            self.log(f'   ⚠️ Page {to_page} stabil tetapi nomor page tidak terekspos oleh DOM; transisi telah diverifikasi.')
+            self.log(f'   WARN: Page {to_page} stabil tetapi nomor page tidak terekspos oleh DOM; transisi telah diverifikasi.')
         else:
-            self.log(f'   ✅ Page {to_page} terverifikasi (advance).')
+            self.log(f'   Page {to_page} terverifikasi (advance).')
         return True
 
     def _hard_reset_page(self, page, page_number):
         try:
             return self._navigate_to_page(page, int(page_number))
         except Exception as e:
-            self.log(f'   ❌ Hard reset ke Page {page_number} gagal: {e}')
+            self.log(f'   FAIL: Hard reset ke Page {page_number} gagal: {e}')
             self.debug(page, f'hard_reset_failed_page_{page_number}')
             raise
 
@@ -866,30 +866,30 @@ class Engine:
         display, dd, _ = self._get_resto_display(page)
         if not dd:
             return False, 'Dropdown Resto tidak ditemukan.'
-        self.log(f'   ↪ Membersihkan selection aktif di slicer Resto{(" ("+context_label+")") if context_label else ""}...')
+        self.log(f'   Membersihkan selection aktif di slicer Resto{(" ("+context_label+")") if context_label else ""}...')
         self.log(f'      • State Resto saat ini: "{display or ""}"')
         if self._is_no_resto_selection(display):
-            self.log('   ✅ Slicer Resto sekarang tidak memiliki selection aktif.')
+            self.log('   Slicer Resto sekarang tidak memiliki selection aktif.')
             return True, []
         if self._is_multiple_resto_selection(display):
-            self.log('   ⚠️ Slicer Resto menunjukkan Multiple selections; DOM tidak aman untuk menebak item mana saja yang aktif.')
+            self.log('   WARN: Slicer Resto menunjukkan Multiple selections; DOM tidak aman untuk menebak item mana saja yang aktif.')
             if page_number is not None:
                 self._hard_reset_page(page, page_number)
                 display2, _, _ = self._get_resto_display(page)
                 if self._is_no_resto_selection(display2):
-                    self.log('   ✅ Hard reset berhasil: Resto kembali ke All.')
+                    self.log('   Hard reset berhasil: Resto kembali ke All.')
                     return True, ['<hard reset>']
             return False, display or 'Multiple selections'
         ok, detail = self._clear_exact_resto_value(page, display)
         if ok:
-            self.log('   ✅ Slicer Resto sekarang tidak memiliki selection aktif.')
+            self.log('   Slicer Resto sekarang tidak memiliki selection aktif.')
             return True, [display]
-        self.log(f'   ⚠️ Uncheck "{display}" belum terverifikasi; detail={detail}')
+        self.log(f'   WARN: Uncheck "{display}" belum terverifikasi; detail={detail}')
         if page_number is not None:
             self._hard_reset_page(page, page_number)
             display2, _, _ = self._get_resto_display(page)
             if self._is_no_resto_selection(display2):
-                self.log('   ✅ Hard reset berhasil: Resto kembali ke All.')
+                self.log('   Hard reset berhasil: Resto kembali ke All.')
                 return True, ['<hard reset>']
         return False, detail
 
@@ -1011,7 +1011,7 @@ class Engine:
             try: page.keyboard.press('Escape')
             except Exception: pass
             return False
-        self.log(f'   ✅ Ditemukan pilihan "{row["text"]}" di dropdown Resto')
+        self.log(f'   Ditemukan pilihan "{row["text"]}" di dropdown Resto')
         page.mouse.click(row['x'], row['y'])
         page.wait_for_timeout(int(CONFIG.get('wait_after_select_ms', 400)))
         try: page.keyboard.press('Escape')
@@ -1049,55 +1049,55 @@ class Engine:
                 current = self._normalize_resto_display(display)
                 target = self._normalize_resto_display(value)
                 if current == target:
-                    self.log(f'   ↪ Resto sudah terpilih: "{display}" (skip)')
+                    self.log(f'   Resto sudah terpilih: "{display}" (skip)')
                     sig = self._wait_after_filter(page, value)
                     if sig and sig.get('png_bytes'):
                         self._last_stable_png = sig['png_bytes']
                     verified, detail = self.verify_single_resto(page, value)
                     if verified:
-                        self.log(f'   ✅ Verifikasi single selection Resto: {detail}')
+                        self.log(f'   Verifikasi single selection Resto: {detail}')
                         return True
-                    self.log(f'   ❌ Verifikasi Resto gagal: {detail}')
+                    self.log(f'   FAIL: Verifikasi Resto gagal: {detail}')
                     return False
 
-                self.log(f'   ↪ Smart transition: "{display}" → "{value}" (skip clear)')
+                self.log(f'   Smart transition: "{display}" -> "{value}" (skip clear)')
                 res = self._select_resto_direct(page, value, dd)
                 if not res:
-                    self.log(f'   ⚠️ Smart transition gagal; fallback ke clear-then-select.')
+                    self.log(f'   WARN: Smart transition gagal; fallback ke clear-then-select.')
                 else:
                     sig = self._wait_after_filter(page, value)
                     if sig and sig.get('png_bytes'):
                         self._last_stable_png = sig['png_bytes']
                     verified, detail = self.verify_single_resto(page, value)
                     if verified:
-                        self.log(f'   ✅ Verifikasi single selection Resto: {detail}')
+                        self.log(f'   Verifikasi single selection Resto: {detail}')
                         return True
                     if self._is_multiple_resto_selection(detail):
-                        self.log(f'   ⚠️ Slicer ternyata multi-select; fallback ke clear-then-select.')
+                        self.log(f'   WARN: Slicer ternyata multi-select; fallback ke clear-then-select.')
                     else:
-                        self.log(f'   ❌ Verifikasi Resto gagal: {detail}')
+                        self.log(f'   FAIL: Verifikasi Resto gagal: {detail}')
                         self.debug(page, f'verify_Resto_failed_smart_{value}')
                         return False
             elif dd and self._is_no_resto_selection(display):
                 # Already All — direct select without clear.
-                self.log(f'   ↪ Slicer All; langsung pilih "{value}"')
+                self.log(f'   Slicer All; langsung pilih "{value}"')
                 res = self._select_resto_direct(page, value, dd)
                 if not res:
-                    self.log(f'   ⚠️ Direct select gagal; fallback ke clear-then-select.')
+                    self.log(f'   WARN: Direct select gagal; fallback ke clear-then-select.')
                 else:
                     sig = self._wait_after_filter(page, value)
                     if sig and sig.get('png_bytes'):
                         self._last_stable_png = sig['png_bytes']
                     verified, detail = self.verify_single_resto(page, value)
                     if verified:
-                        self.log(f'   ✅ Verifikasi single selection Resto: {detail}')
+                        self.log(f'   Verifikasi single selection Resto: {detail}')
                         return True
-                    self.log(f'   ❌ Verifikasi Resto gagal: {detail}')
+                    self.log(f'   FAIL: Verifikasi Resto gagal: {detail}')
                     self.debug(page, f'verify_Resto_failed_direct_{value}')
                     return False
 
         # Fallback / non-smart path: clear then select (V14 behavior).
-        self.log(f'   ↪ Menyiapkan slicer Resto untuk "{value}"...')
+        self.log(f'   Menyiapkan slicer Resto untuk "{value}"...')
         reset_ok, _ = self.clear_all_resto_selections(page, f'target {value}', page_number=page_number)
         if not reset_ok:
             self.debug(page, f'clear_Resto_failed_before_{value}')
@@ -1105,24 +1105,24 @@ class Engine:
         if self._is_stop():
             return False
 
-        self.log(f'   ↪ Mencari dropdown Resto untuk "{value}"...')
+        self.log(f'   Mencari dropdown Resto untuk "{value}"...')
         dd, all_dds, method = self.find_resto_dropdown(page)
         if not dd:
-            self.log('   ❌ Dropdown Resto tidak ditemukan')
+            self.log('   FAIL: Dropdown Resto tidak ditemukan')
             self.debug(page, f'dropdown_notfound_{value}')
             return False
-        self.log(f'   📌 {len(all_dds)} dropdown ditemukan: [{", ".join(str(round(x["left"])) for x in all_dds)}]')
-        self.log(f'   🎯 Target Resto: x={round(dd["x"])} y={round(dd["y"])} ({method})')
+        self.log(f'   {len(all_dds)} dropdown ditemukan: [{", ".join(str(round(x["left"])) for x in all_dds)}]')
+        self.log(f'   Target Resto: x={round(dd["x"])} y={round(dd["y"])} ({method})')
 
         res = self.try_dropdown(page, dd, value)
         if not res.get('match'):
-            self.log(f'   ❌ "{value}" tidak ditemukan di dropdown Resto')
+            self.log(f'   FAIL: "{value}" tidak ditemukan di dropdown Resto')
             self.debug(page, f'dropdown_Resto_notfound_{value}')
             try: page.keyboard.press('Escape')
             except Exception: pass
             return False
 
-        self.log(f'   ✅ Ditemukan pilihan "{res["text"]}" di dropdown Resto')
+        self.log(f'   Ditemukan pilihan "{res["text"]}" di dropdown Resto')
         if self._is_stop():
             return False
         page.mouse.click(res['x'], res['y'])
@@ -1138,13 +1138,13 @@ class Engine:
             self._last_stable_png = sig['png_bytes']
 
         display, _, _ = self._get_resto_display(page)
-        self.log(f'   ↪ State Resto setelah render: "{display or ""}"')
+        self.log(f'   State Resto setelah render: "{display or ""}"')
         verified, detail = self.verify_single_resto(page, value)
         if not verified:
-            self.log(f'   ❌ Verifikasi Resto gagal: {detail}')
+            self.log(f'   FAIL: Verifikasi Resto gagal: {detail}')
             self.debug(page, f'verify_Resto_failed_{value}')
             return False
-        self.log(f'   ✅ Verifikasi single selection Resto: {detail}')
+        self.log(f'   Verifikasi single selection Resto: {detail}')
         return True
 
     @staticmethod
@@ -1226,18 +1226,18 @@ class Engine:
         (~3-5s) which is sufficient for most errors. Only if the clear itself
         fails do we fall back to a full hard reset.
         """
-        self.log(f'   🔄 Membersihkan state setelah error Resto {resto}...')
+        self.log(f'   Membersihkan state setelah error Resto {resto}...')
         if CONFIG.get('opt_light_recovery', True):
             try:
                 ok, detail = self.clear_all_resto_selections(
                     page, context_label=f'light recovery {resto}', page_number=None
                 )
                 if ok:
-                    self.log(f'   ✅ Light recovery berhasil: {detail}')
+                    self.log(f'   Light recovery berhasil: {detail}')
                     return True
             except Exception as e:
-                self.log(f'   ⚠️ Light recovery gagal: {e}')
-            self.log(f'   ⚠️ Light recovery tidak cukup; fallback ke hard reset...')
+                self.log(f'   WARN: Light recovery gagal: {e}')
+            self.log(f'   WARN: Light recovery tidak cukup; fallback ke hard reset...')
         else:
             # Legacy V15 behavior: always hard reset.
             try:
@@ -1245,16 +1245,16 @@ class Engine:
                     page, context_label=f'cleanup error {resto}', page_number=None
                 )
                 if ok:
-                    self.log(f'   ✅ Cleanup state setelah error berhasil: {detail}')
+                    self.log(f'   Cleanup state setelah error berhasil: {detail}')
                     return True
             except Exception as e:
-                self.log(f'   ⚠️ Cleanup langsung gagal: {e}')
+                self.log(f'   WARN: Cleanup langsung gagal: {e}')
         try:
             self._hard_reset_page(page, page_number)
-            self.log(f'   ✅ Hard reset berhasil setelah error Resto {resto}.')
+            self.log(f'   Hard reset berhasil setelah error Resto {resto}.')
             return True
         except Exception as e:
-            self.log(f'   ❌ Hard reset setelah error Resto {resto} juga gagal: {e}')
+            self.log(f'   FAIL: Hard reset setelah error Resto {resto} juga gagal: {e}')
             return False
 
     def run(self, pages, restos, output_format):
@@ -1272,7 +1272,7 @@ class Engine:
         # reloading the URL and re-walking from page 1 for every page.
         sequential = bool(CONFIG.get('opt_sequential_page_nav', True)) and len(pages) > 1
         if sequential:
-            self.log(f'⚡ V15 sequential page navigation aktif: {pages[0]} → {pages[-1]} via Next-clicks.')
+            self.log(f'V15 sequential page navigation aktif: {pages[0]} -> {pages[-1]} via Next-clicks.')
 
         try:
             self.set_output_dir(CONFIG.get('output_dir') or str(APP_DIR / 'output'))
@@ -1281,7 +1281,7 @@ class Engine:
                 raise ValueError('Format output harus PNG atau PDF.')
             ensure_playwright()
             self.progress_cb(0, total_jobs, 'Menyiapkan browser...')
-            self.log(f'🚀 V15 Optimized mulai | Pages={pages} | Resto={len(restos)} | Jobs={total_jobs} | Output={output_format}')
+            self.log(f'V15 Optimized mulai | Pages={pages} | Resto={len(restos)} | Jobs={total_jobs} | Output={output_format}')
 
             with sync_playwright() as p:
                 browser = p.chromium.launch(
@@ -1316,20 +1316,20 @@ class Engine:
                         # If the fast advance fails, try one full reset before
                         # declaring the page failed. This keeps accuracy intact.
                         if sequential and current_page_number is not None:
-                            self.log(f'   ⚠️ Advance gagal; mencoba full reset ke Page {page_number}...')
+                            self.log(f'   WARN: Advance gagal; mencoba full reset ke Page {page_number}...')
                             try:
                                 self._hard_reset_page(page, page_number)
                                 current_page_number = page_number
                             except Exception as e2:
                                 page_error = True
                                 page_setup_message = str(e2)
-                                self.log(f'   ❌ PAGE SETUP GAGAL: Page {page_number} — {e2}')
+                                self.log(f'   FAIL: PAGE SETUP GAGAL: Page {page_number} — {e2}')
                                 self.debug(page, f'page_setup_failed_{page_number}')
                                 current_page_number = None
                         else:
                             page_error = True
                             page_setup_message = str(e)
-                            self.log(f'   ❌ PAGE SETUP GAGAL: Page {page_number} — {e}')
+                            self.log(f'   FAIL: PAGE SETUP GAGAL: Page {page_number} — {e}')
                             self.debug(page, f'page_setup_failed_{page_number}')
                             current_page_number = None
 
@@ -1354,7 +1354,7 @@ class Engine:
                         try:
                             filter_ok=self.set_filter(page, resto, page_number=page_number)
                             if not filter_ok and not self.stop_requested:
-                                self.log(f'   🔁 Recovery satu kali untuk Resto {resto}...')
+                                self.log(f'   Retry: Recovery satu kali untuk Resto {resto}...')
                                 try:
                                     # V16: light recovery first (clear Resto, no full reload).
                                     # Only hard-reset if the clear fails. This avoids the
@@ -1366,7 +1366,7 @@ class Engine:
                                     else:
                                         filter_ok=False
                                 except Exception as recovery_error:
-                                    self.log(f'   ⚠️ Recovery awal gagal: {recovery_error}')
+                                    self.log(f'   WARN: Recovery awal gagal: {recovery_error}')
                                     filter_ok=False
                             if not filter_ok:
                                 if self.stop_requested:
@@ -1398,7 +1398,7 @@ class Engine:
                                 'stage': 'CAPTURE', 'message': 'OK',
                                 'output': str(capture_path)
                             }
-                            self.log(f'   ✅ Selesai: {resto} → {capture_path.name}')
+                            self.log(f'   Selesai: {resto} -> {capture_path.name}')
                         except Exception as e:
                             msg=str(e)
                             page_results[key]={
@@ -1406,7 +1406,7 @@ class Engine:
                                 'success': False, 'page_error': False,
                                 'stage': 'RESTO', 'message': msg
                             }
-                            self.log(f'   ❌ Gagal: Page {page_number} / {resto} — {msg}')
+                            self.log(f'   FAIL: Gagal: Page {page_number} / {resto} — {msg}')
                             self.debug(page, f'error_page{page_number}_{resto}')
                             if not self.stop_requested:
                                 # V16: light recovery — clear Resto selection (~3s)
@@ -1424,9 +1424,9 @@ class Engine:
 
                     if not self.stop_requested and page_index < len(pages):
                         if sequential and current_page_number is not None:
-                            self.log(f'   ✅ Page {page_number} selesai. Page {pages[page_index]} via Next-click (tanpa reload).')
+                            self.log(f'   Page {page_number} selesai. Page {pages[page_index]} via Next-click (tanpa reload).')
                         else:
-                            self.log(f'   ✅ Page {page_number} selesai. Page {pages[page_index]} akan dimulai dari fresh reset.')
+                            self.log(f'   Page {page_number} selesai. Page {pages[page_index]} akan dimulai dari fresh reset.')
 
                 ended_at=datetime.now().isoformat(timespec='seconds')
                 manifest=self._write_batch_manifest(pages, restos, output_format, page_results, started_at, ended_at)
@@ -1441,10 +1441,10 @@ class Engine:
                     'pages': pages,
                     'restos': restos
                 })
-                self.log(f'\n📁 BATCH SELESAI: {success} berhasil, {failed} gagal dari {total_jobs} job.')
-                self.log(f'📄 Manifest: {manifest.name}')
+                self.log(f'\nBATCH SELESAI: {success} berhasil, {failed} gagal dari {total_jobs} job.')
+                self.log(f'Manifest: {manifest.name}')
         except Exception as e:
-            self.log(f'❌ Fatal error: {e}')
+            self.log(f'FAIL: Fatal error: {e}')
             ended_at=datetime.now().isoformat(timespec='seconds')
             try:
                 manifest=self._write_batch_manifest(pages, restos, output_format if 'output_format' in locals() else 'UNKNOWN', page_results, started_at, ended_at)
@@ -1476,12 +1476,12 @@ class Engine:
                 if context:
                     context.close()
             except Exception as e:
-                self.log(f'   ⚠️ Gagal menutup context: {e}')
+                self.log(f'   WARN: Gagal menutup context: {e}')
             try:
                 if browser:
                     browser.close()
             except Exception as e:
-                self.log(f'   ⚠️ Gagal menutup browser: {e}')
+                self.log(f'   WARN: Gagal menutup browser: {e}')
 
 
 class App(tk.Tk):
@@ -1536,7 +1536,7 @@ class App(tk.Tk):
         b=ttk.Frame(f); b.pack(fill='x',pady=10)
         self.start=ttk.Button(b,text='▶ START MULTI-PAGE (V16)',command=self.start_run); self.start.pack(side='left')
         self.stopb=ttk.Button(b,text='■ STOP',command=self.stop_run,state='disabled'); self.stopb.pack(side='left',padx=8)
-        ttk.Button(b,text='📁 BUKA OUTPUT',command=lambda: os.startfile(OUTPUT_DIR)).pack(side='left')
+        ttk.Button(b,text='BUKA OUTPUT',command=lambda: os.startfile(OUTPUT_DIR)).pack(side='left')
 
         self.prog=tk.DoubleVar(); ttk.Progressbar(f,variable=self.prog,maximum=100).pack(fill='x')
         self.plabel=ttk.Label(f,text='Siap.'); self.plabel.pack(anchor='w',pady=(3,8))
@@ -1591,7 +1591,7 @@ class App(tk.Tk):
         self.thread=threading.Thread(target=self.engine.run,args=(pages,restos,output_format),daemon=True); self.thread.start()
 
     def stop_run(self):
-        if self.engine: self.engine.stop(); self.add_log('⏹ Permintaan stop dikirim...')
+        if self.engine: self.engine.stop(); self.add_log('Permintaan stop dikirim...')
 
     def poll(self):
         try:
