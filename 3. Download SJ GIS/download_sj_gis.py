@@ -595,15 +595,23 @@ return (function(){
   var uls = document.querySelectorAll('ul.drop-left');
   var ulVisible = 0;
   for (var i=0;i<uls.length;i++) if (vis(uls[i])) ulVisible++;
-  // Hitung tab yang ada kode di text-nya (defensive — kalau ada tab SJ lama)
-  var tabs = document.querySelectorAll('div.module-tab, div.form-tab-title');
-  var tabCount = 0;
-  var tabTexts = [];
-  for (var i=0;i<tabs.length;i++) {
-    if (vis(tabs[i])) {
-      tabCount++;
-      var t = (tabs[i].innerText || '').trim();
-      if (t && t.length < 80) tabTexts.push(t);
+  // v8.14.1: separate MAIN module tab vs SUB-tab (detail SJ form).
+  // MAIN tab (div.module-tab) = top-level nav e.g. "Pemindahan Barang". JANGAN di-close.
+  // SUB-tab (div.form-tab-title) = detail SJ form e.g. "Data Baru", "IT.xxx". Boleh di-close.
+  var mainTabs = document.querySelectorAll('div.module-tab');
+  var subTabs = document.querySelectorAll('div.form-tab-title');
+  var mainTabTexts = [];
+  var subTabTexts = [];
+  for (var i=0;i<mainTabs.length;i++) {
+    if (vis(mainTabs[i])) {
+      var t = (mainTabs[i].innerText || '').trim();
+      if (t && t.length < 80) mainTabTexts.push(t);
+    }
+  }
+  for (var i=0;i<subTabs.length;i++) {
+    if (vis(subTabs[i])) {
+      var t = (subTabs[i].innerText || '').trim();
+      if (t && t.length < 80) subTabTexts.push(t);
     }
   }
   // Cek input value=IT.* (indikasi detail form open utk kode IT)
@@ -620,8 +628,10 @@ return (function(){
     btnCommentAttachment_visible: btnVisible,
     dropleft_total: uls.length,
     dropleft_visible: ulVisible,
-    detail_tab_count: tabCount,
-    detail_tab_texts: tabTexts.slice(0, 5),
+    main_tab_count: mainTabTexts.length,
+    main_tab_texts: mainTabTexts.slice(0, 5),
+    sub_tab_count: subTabTexts.length,
+    sub_tab_texts: subTabTexts.slice(0, 5),
     detail_input_kode: detailKode
   };
 })();
@@ -634,7 +644,8 @@ def dump_state_snapshot(driver, label):
         state = driver.execute_script(JS_DIAG_STATE) or {}
         say(f"      [diag:{label}] btnCommentAttachment_visible={state.get('btnCommentAttachment_visible')}")
         say(f"      [diag:{label}] ul.drop-left total={state.get('dropleft_total',0)} visible={state.get('dropleft_visible',0)}")
-        say(f"      [diag:{label}] detail_tab_count={state.get('detail_tab_count',0)} texts={state.get('detail_tab_texts',[])}")
+        say(f"      [diag:{label}] MAIN_tab count={state.get('main_tab_count',0)} texts={state.get('main_tab_texts',[])}")
+        say(f"      [diag:{label}] SUB_tab  count={state.get('sub_tab_count',0)} texts={state.get('sub_tab_texts',[])}")
         say(f"      [diag:{label}] detail_input_kode={state.get('detail_input_kode')}")
         return state
     except Exception as e:
@@ -664,22 +675,45 @@ def screenshot_fail(driver, kode, label):
 # ============================================================
 JS_CLICK_FIRST_TAB_CLOSE = JS_VIS + """
 return (function(){
-  // Cari SEMUA tombol close di tab header (i.icon-cancel-2.smaller atau variant)
+  // v8.14.1 DEFENSIVE: HANYA close SUB-tab (detail SJ form), JANGAN close MAIN module tab.
+  // Root cause v8.14 bug: selector `i.icon-cancel-2.smaller, i[class*="icon-cancel-2"]`
+  // kelebaran — match juga tombol close di MAIN module tab (e.g., "Pemindahan Barang").
+  // Akibatnya: main tab ke-close → search box hilang → semua item fail E_SEARCH.
+  //
+  // Fix: 3 defensive layers:
+  //   1. Skip kalau close button ada di dalam ancestor `div.module-tab` (main nav)
+  //   2. Skip kalau close button BUKAN di dalam ancestor `div.form-tab-title` (sub-tab)
+  //   3. Skip kalau sub-tab ancestor text kosong (defensive — hanya close tab dengan text)
   var btns = document.querySelectorAll('i.icon-cancel-2.smaller, i[class*="icon-cancel-2"]');
   for (var i=0;i<btns.length;i++){
     var b = btns[i];
     if (!vis(b)) continue;
+    
+    // Layer 1: cek ancestor utk MAIN module tab. Kalau ada ancestor dgn class module-tab,
+    // ini MAIN nav (e.g., "Pemindahan Barang") → SKIP, jangan close.
+    var mainAncestor = b.closest('div.module-tab, .module-tab, li.module-tab, .main-tab, .app-tab');
+    if (mainAncestor) continue;
+    
+    // Layer 2: cek ancestor utk SUB-tab (detail form). Kalau TIDAK ada ancestor sub-tab,
+    // ini bukan detail form tab → SKIP (defensive — jangan close yang tidak dikenali).
+    var subAncestor = b.closest('div.form-tab-title, .form-tab, li.form-tab-title, .sub-tab, .trans-detail-tab, .form-tabs');
+    if (!subAncestor) continue;
+    
+    // Layer 3: cek text dari sub-tab ancestor. Kalau text kosong, SKIP
+    // (defensive — hanya close sub-tab yang punya text seperti "Data Baru" / "IT.xxx").
+    var subText = (subAncestor.innerText || '').trim();
+    if (!subText) continue;
+    
     try {
       b.scrollIntoView({block:'center'});
-      // Dispatch native click sequence (sama kayak JS_CLICK_SEQ_SINGLE)
       var init = {bubbles:true, cancelable:true, view:window, button:0, buttons:1};
       ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(t){
         try { b.dispatchEvent(new MouseEvent(t, init)); } catch(e){}
       });
-      return true;  // success, klik 1 tab
+      return true;  // success, klik 1 sub-tab
     } catch(e) { continue; }
   }
-  return false;  // no more visible close buttons
+  return false;  // no more visible sub-tab close buttons (atau semua sudah di-skip defensive)
 })();
 """
 
