@@ -329,81 +329,6 @@ def say_summary_box(lines):
         say(f" {line}")
 
 # ============================================================
-# DIAGNOSTIC HELPERS (v8.14) — capture state untuk debugging E_DROPDOWN
-# ============================================================
-# Purpose: kalau E_DROPDOWN terjadi, kita butuh data konkret buat root cause.
-# Tanpa ini, kita cuma bisa menejek. Dengan ini, kita bisa lihat:
-#   - Berapa banyak detail tab yang kebuka saat item diproses
-#   - Apakah #btnCommentAttachment visible (dari SJ lama?)
-#   - Berapa total ul.drop-left di DOM (vs visible)
-#   - Screenshot visual state page saat fail
-# ============================================================
-JS_DIAG_STATE = JS_VIS + """
-return (function(){
-  var btn = document.querySelector('#btnCommentAttachment');
-  var btnVisible = (btn && vis(btn));
-  var uls = document.querySelectorAll('ul.drop-left');
-  var ulVisible = 0;
-  for (var i=0;i<uls.length;i++) if (vis(uls[i])) ulVisible++;
-  // Hitung tab yang ada kode di text-nya (defensive — kalau ada tab SJ lama)
-  var tabs = document.querySelectorAll('div.module-tab, div.form-tab-title');
-  var tabCount = 0;
-  var tabTexts = [];
-  for (var i=0;i<tabs.length;i++) {
-    if (vis(tabs[i])) {
-      tabCount++;
-      var t = (tabs[i].innerText || '').trim();
-      if (t && t.length < 80) tabTexts.push(t);
-    }
-  }
-  // Cek input value=IT.* (indikasi detail form open utk kode IT)
-  var detailKode = null;
-  var inps = document.querySelectorAll('input');
-  for (var i=0;i<inps.length;i++) {
-    var v = (inps[i].value || '').trim();
-    if (v.indexOf('IT.') === 0 && vis(inps[i])) {
-      detailKode = v;
-      break;
-    }
-  }
-  return {
-    btnCommentAttachment_visible: btnVisible,
-    dropleft_total: uls.length,
-    dropleft_visible: ulVisible,
-    detail_tab_count: tabCount,
-    detail_tab_texts: tabTexts.slice(0, 5),
-    detail_input_kode: detailKode
-  };
-})();
-"""
-
-def dump_state_snapshot(driver, label):
-    """Dump state page untuk debugging. Label = konteks (e.g., 'PRE_FIRST_ITEM', 'E_DROPDOWN_FAIL')."""
-    try:
-        switch_top(driver)
-        state = driver.execute_script(JS_DIAG_STATE) or {}
-        say(f"      [diag:{label}] btnCommentAttachment_visible={state.get('btnCommentAttachment_visible')}")
-        say(f"      [diag:{label}] ul.drop-left total={state.get('dropleft_total',0)} visible={state.get('dropleft_visible',0)}")
-        say(f"      [diag:{label}] detail_tab_count={state.get('detail_tab_count',0)} texts={state.get('detail_tab_texts',[])}")
-        say(f"      [diag:{label}] detail_input_kode={state.get('detail_input_kode')}")
-        return state
-    except Exception as e:
-        say(f"      [diag:{label}] error: {e}")
-        return {}
-
-def screenshot_fail(driver, kode, label):
-    """Save screenshot untuk forensics. Filename: FAIL_{kode}_{label}.png di DOWNLOAD_DIR."""
-    try:
-        fname = f"FAIL_{kode}_{label}.png"
-        path = os.path.join(DOWNLOAD_DIR, fname)
-        driver.save_screenshot(path)
-        say(f"      [screenshot] saved: {path}")
-        return path
-    except Exception as e:
-        say(f"      [screenshot] failed: {e}")
-        return None
-
-# ============================================================
 # CHROME CONNECTION
 # ============================================================
 def connect_chrome():
@@ -655,6 +580,78 @@ return (function(kode){
   return {ok:true, value: el.value};
 })(arguments[0]);
 """
+
+# ============================================================
+# DIAGNOSTIC HELPERS (v8.14) — capture state untuk debugging E_DROPDOWN
+# ============================================================
+# Purpose: kalau E_DROPDOWN terjadi, kita butuh data konkret buat root cause.
+# Ditempatkan SETELAH JS_VIS definition (line 509) supaya JS_DIAG_STATE
+# yang reference JS_VIS bisa di-evaluate di module load time.
+# ============================================================
+JS_DIAG_STATE = JS_VIS + """
+return (function(){
+  var btn = document.querySelector('#btnCommentAttachment');
+  var btnVisible = (btn && vis(btn));
+  var uls = document.querySelectorAll('ul.drop-left');
+  var ulVisible = 0;
+  for (var i=0;i<uls.length;i++) if (vis(uls[i])) ulVisible++;
+  // Hitung tab yang ada kode di text-nya (defensive — kalau ada tab SJ lama)
+  var tabs = document.querySelectorAll('div.module-tab, div.form-tab-title');
+  var tabCount = 0;
+  var tabTexts = [];
+  for (var i=0;i<tabs.length;i++) {
+    if (vis(tabs[i])) {
+      tabCount++;
+      var t = (tabs[i].innerText || '').trim();
+      if (t && t.length < 80) tabTexts.push(t);
+    }
+  }
+  // Cek input value=IT.* (indikasi detail form open utk kode IT)
+  var detailKode = null;
+  var inps = document.querySelectorAll('input');
+  for (var i=0;i<inps.length;i++) {
+    var v = (inps[i].value || '').trim();
+    if (v.indexOf('IT.') === 0 && vis(inps[i])) {
+      detailKode = v;
+      break;
+    }
+  }
+  return {
+    btnCommentAttachment_visible: btnVisible,
+    dropleft_total: uls.length,
+    dropleft_visible: ulVisible,
+    detail_tab_count: tabCount,
+    detail_tab_texts: tabTexts.slice(0, 5),
+    detail_input_kode: detailKode
+  };
+})();
+"""
+
+def dump_state_snapshot(driver, label):
+    """Dump state page untuk debugging. Label = konteks (e.g., 'PRE_CLEANUP', 'E_DROPDOWN_FAIL')."""
+    try:
+        switch_top(driver)
+        state = driver.execute_script(JS_DIAG_STATE) or {}
+        say(f"      [diag:{label}] btnCommentAttachment_visible={state.get('btnCommentAttachment_visible')}")
+        say(f"      [diag:{label}] ul.drop-left total={state.get('dropleft_total',0)} visible={state.get('dropleft_visible',0)}")
+        say(f"      [diag:{label}] detail_tab_count={state.get('detail_tab_count',0)} texts={state.get('detail_tab_texts',[])}")
+        say(f"      [diag:{label}] detail_input_kode={state.get('detail_input_kode')}")
+        return state
+    except Exception as e:
+        say(f"      [diag:{label}] error: {e}")
+        return {}
+
+def screenshot_fail(driver, kode, label):
+    """Save screenshot untuk forensics. Filename: FAIL_{kode}_{label}.png di DOWNLOAD_DIR."""
+    try:
+        fname = f"FAIL_{kode}_{label}.png"
+        path = os.path.join(DOWNLOAD_DIR, fname)
+        driver.save_screenshot(path)
+        say(f"      [screenshot] saved: {path}")
+        return path
+    except Exception as e:
+        say(f"      [screenshot] failed: {e}")
+        return None
 
 def search_kode(driver, kode, fr):
     """Ketik kode + klik btn-search via JS. Return True kalau row kode muncul."""
