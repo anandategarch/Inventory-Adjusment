@@ -1,7 +1,31 @@
 """
-download_sj_gis.py  (v8.13)
+download_sj_gis.py  (v8.14)
 =========================
 Download Surat Jalan (SJ) dari modul PEMINDAHAN BARANG Accurate Online (database GiS).
+
+PERBAIKAN v8.14 (dari v8.13):
+  - TUJUAN: fix "first item always fail" — root cause ditemukan via pattern analysis.
+  - ROOT CAUSE (verified via code analysis + user confirmation):
+    * connect_chrome() connect ke EXISTING Chrome (line debuggerAddress)
+    * State Chrome = state terakhir user — kalau user tinggal detail form SJ lain
+      kebuka sebelum run tool, item 1 mulai dengan state KOTOR.
+    * #btnCommentAttachment dari SJ LAMA masih visible → JS_DETAIL_OPEN return true
+      berdasar tombol stale, BUKAN karena detail item 1 kebuka.
+    * click_comment_attachment klik tombol stale → dropdown nggak reliable → E_DROPDOWN
+    * Item 2+ selalu succeed karena recover_to_list jalan setelah item 1 (state jadi clean).
+  - FIX: panggil recover_to_list(driver, "INIT") SEBELUM loop mulai.
+    Pakai kode placeholder "INIT" — close_detail_tab nggak nemu tab dgn kode INIT,
+    return True, lalu close_attachment_overlay + btnToggleList jalan → state bersih.
+  - DIAGNOSTIC (data capture untuk verify hipotesis + future debugging):
+    * dump_state_snapshot(driver, "PRE_CLEANUP") — capture state sebelum cleanup
+      (berapa tab? btn visible? ul.drop-left total/visible?)
+    * dump_state_snapshot(driver, "POST_CLEANUP") — verify cleanup berhasil
+    * dump_state_snapshot(driver, "E_DROPDOWN_FAIL") — capture state saat E_DROPDOWN
+    * screenshot_fail(driver, kode, "E_DROPDOWN") — screenshot visual saat fail
+    * baseline log sekarang include "total" count (sebelumnya cuma "visible"):
+      [baseline] ul.drop-left total:X visible:Y
+      → kalau total=0 → click nggak ngefek sama sekali (no AJAX, no DOM change)
+      → kalau total>0 visible=0 → dropdown ada tapi hidden (CSS/timing issue)
 
 PERBAIKAN v8.13 (dari v8.12):
   - TUJUAN: kasih marker machine-readable di akhir main() biar UI (ui_app.py)
@@ -303,6 +327,81 @@ def say_summary_box(lines):
     say("── RINGKASAN ──")
     for line in lines:
         say(f" {line}")
+
+# ============================================================
+# DIAGNOSTIC HELPERS (v8.14) — capture state untuk debugging E_DROPDOWN
+# ============================================================
+# Purpose: kalau E_DROPDOWN terjadi, kita butuh data konkret buat root cause.
+# Tanpa ini, kita cuma bisa menejek. Dengan ini, kita bisa lihat:
+#   - Berapa banyak detail tab yang kebuka saat item diproses
+#   - Apakah #btnCommentAttachment visible (dari SJ lama?)
+#   - Berapa total ul.drop-left di DOM (vs visible)
+#   - Screenshot visual state page saat fail
+# ============================================================
+JS_DIAG_STATE = JS_VIS + """
+return (function(){
+  var btn = document.querySelector('#btnCommentAttachment');
+  var btnVisible = (btn && vis(btn));
+  var uls = document.querySelectorAll('ul.drop-left');
+  var ulVisible = 0;
+  for (var i=0;i<uls.length;i++) if (vis(uls[i])) ulVisible++;
+  // Hitung tab yang ada kode di text-nya (defensive — kalau ada tab SJ lama)
+  var tabs = document.querySelectorAll('div.module-tab, div.form-tab-title');
+  var tabCount = 0;
+  var tabTexts = [];
+  for (var i=0;i<tabs.length;i++) {
+    if (vis(tabs[i])) {
+      tabCount++;
+      var t = (tabs[i].innerText || '').trim();
+      if (t && t.length < 80) tabTexts.push(t);
+    }
+  }
+  // Cek input value=IT.* (indikasi detail form open utk kode IT)
+  var detailKode = null;
+  var inps = document.querySelectorAll('input');
+  for (var i=0;i<inps.length;i++) {
+    var v = (inps[i].value || '').trim();
+    if (v.indexOf('IT.') === 0 && vis(inps[i])) {
+      detailKode = v;
+      break;
+    }
+  }
+  return {
+    btnCommentAttachment_visible: btnVisible,
+    dropleft_total: uls.length,
+    dropleft_visible: ulVisible,
+    detail_tab_count: tabCount,
+    detail_tab_texts: tabTexts.slice(0, 5),
+    detail_input_kode: detailKode
+  };
+})();
+"""
+
+def dump_state_snapshot(driver, label):
+    """Dump state page untuk debugging. Label = konteks (e.g., 'PRE_FIRST_ITEM', 'E_DROPDOWN_FAIL')."""
+    try:
+        switch_top(driver)
+        state = driver.execute_script(JS_DIAG_STATE) or {}
+        say(f"      [diag:{label}] btnCommentAttachment_visible={state.get('btnCommentAttachment_visible')}")
+        say(f"      [diag:{label}] ul.drop-left total={state.get('dropleft_total',0)} visible={state.get('dropleft_visible',0)}")
+        say(f"      [diag:{label}] detail_tab_count={state.get('detail_tab_count',0)} texts={state.get('detail_tab_texts',[])}")
+        say(f"      [diag:{label}] detail_input_kode={state.get('detail_input_kode')}")
+        return state
+    except Exception as e:
+        say(f"      [diag:{label}] error: {e}")
+        return {}
+
+def screenshot_fail(driver, kode, label):
+    """Save screenshot untuk forensics. Filename: FAIL_{kode}_{label}.png di DOWNLOAD_DIR."""
+    try:
+        fname = f"FAIL_{kode}_{label}.png"
+        path = os.path.join(DOWNLOAD_DIR, fname)
+        driver.save_screenshot(path)
+        say(f"      [screenshot] saved: {path}")
+        return path
+    except Exception as e:
+        say(f"      [screenshot] failed: {e}")
+        return None
 
 # ============================================================
 # CHROME CONNECTION
@@ -800,7 +899,7 @@ def click_first_dropdown_item(driver, timeout=8):
         before = driver.execute_script(JS_COUNT_DROPLEFT) or {"visible":0}
     except:
         before = {"visible":0}
-    say(f"      [baseline] ul.drop-left visible: {before.get('visible',0)}")
+    say(f"      [baseline] ul.drop-left total:{before.get('total',0)} visible:{before.get('visible',0)}")
     end = time.time() + timeout
     while time.time() < end:
         switch_top(driver)
@@ -1438,6 +1537,9 @@ def process_one_kode(driver, kode, fr, seq, total):
             say_step("Klik dropdown", "FAIL")
             say(f"     → Dropdown tidak ditemukan (8s). Mungkin SJ ini TANPA dokumen,")
             say(f"       atau btnCommentAttachment click nggak trigger jQuery dropdown handler.")
+            # v8.14 DIAGNOSTIC: capture state utk root cause analysis
+            dump_state_snapshot(driver, "E_DROPDOWN_FAIL")
+            screenshot_fail(driver, kode, "E_DROPDOWN")
             recover_to_list(driver, kode)
             return False, "E_DROPDOWN"
         say_step("Klik dropdown", "OK")
@@ -1575,6 +1677,28 @@ def main():
         say("     → Pastikan halaman LIST Pemindahan Barang terbuka & login aktif.")
         sys.exit(1)
     say_step("Frame list", "OK")
+
+    # v8.14 FIX: Cleanup state sebelum proses first item.
+    # Root cause "first item always fail": connect_chrome() connect ke EXISTING Chrome
+    # (line 310 pakai debuggerAddress). State Chrome = state terakhir user. Kalau user
+    # tinggal detail form SJ lain kebuka sebelum run tool, item 1 mulai dengan state kotor:
+    #   - #btnCommentAttachment dari SJ lama masih visible
+    #   - JS_DETAIL_OPEN return true berdasar tombol stale, BUKAN detail 03763 kebuka
+    #   - click_comment_attachment klik tombol stale → dropdown nggak reliable → E_DROPDOWN
+    # Item 2+ selalu succeed karena recover_to_list jalan setelah item 1.
+    # Fix: panggil recover_to_list sebelum loop → item 1 mulai dengan state clean.
+    # Pakai kode placeholder "INIT" — close_detail_tab nggak nemu tab dengan kode INIT,
+    # return True, lalu close_attachment_overlay + btnToggleList jalan.
+    say_step("Cleanup state")
+    try:
+        # Dump pre-cleanup state utk verify hipotesis (ada berapa tab? btn visible?)
+        dump_state_snapshot(driver, "PRE_CLEANUP")
+        recover_to_list(driver, "INIT")
+        say_step("Cleanup state", "OK")
+        # Dump post-cleanup state utk verify cleanup berhasil
+        dump_state_snapshot(driver, "POST_CLEANUP")
+    except Exception as e:
+        say_step("Cleanup state", f"WARN ({e})")
 
     # Loop proses tiap kode
     results = []
