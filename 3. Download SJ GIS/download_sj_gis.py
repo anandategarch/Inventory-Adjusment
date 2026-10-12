@@ -653,6 +653,55 @@ def screenshot_fail(driver, kode, label):
         say(f"      [screenshot] failed: {e}")
         return None
 
+# ============================================================
+# v8.14 FIX: close_all_detail_tabs — close SEMUA detail tab
+# (bukan cuma tab dengan kode tertentu seperti close_detail_tab)
+# Dipanggil SEBELUM loop utk bersihin leftover tabs dari previous session.
+# Root cause: connect_chrome connect ke EXISTING Chrome. Kalau user tinggal
+# detail tab SJ lama kebuka (text='Data Baru' dll), tab itu NGGAK akan di-close
+# oleh recover_to_list(kode_placeholder) karena JS_MARK_CLOSE requires text include kode.
+# Close-all ini scan semua i.icon-cancel-2.smaller visible + click satu-satu.
+# ============================================================
+JS_CLICK_FIRST_TAB_CLOSE = JS_VIS + """
+return (function(){
+  // Cari SEMUA tombol close di tab header (i.icon-cancel-2.smaller atau variant)
+  var btns = document.querySelectorAll('i.icon-cancel-2.smaller, i[class*="icon-cancel-2"]');
+  for (var i=0;i<btns.length;i++){
+    var b = btns[i];
+    if (!vis(b)) continue;
+    try {
+      b.scrollIntoView({block:'center'});
+      // Dispatch native click sequence (sama kayak JS_CLICK_SEQ_SINGLE)
+      var init = {bubbles:true, cancelable:true, view:window, button:0, buttons:1};
+      ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(t){
+        try { b.dispatchEvent(new MouseEvent(t, init)); } catch(e){}
+      });
+      return true;  // success, klik 1 tab
+    } catch(e) { continue; }
+  }
+  return false;  // no more visible close buttons
+})();
+"""
+
+def close_all_detail_tabs(driver, max_close=10):
+    """Close SEMUA detail tab yang kebuka, regardless of kode.
+    Dipanggil SEBELUM loop utk bersihin leftover tabs dari previous session.
+    Returns: count of tabs closed."""
+    closed_count = 0
+    for _ in range(max_close):
+        switch_top(driver)
+        try:
+            clicked = driver.execute_script(JS_CLICK_FIRST_TAB_CLOSE)
+        except Exception as e:
+            say(f"  [close_all_detail_tabs] JS error: {e}")
+            break
+        if not clicked:
+            break  # no more visible close buttons
+        closed_count += 1
+        say(f"  [close_all_detail_tabs] closed tab #{closed_count}")
+        time.sleep(1.5)  # wait for loading (user confirm: ada loading setelah close)
+    return closed_count
+
 def search_kode(driver, kode, fr):
     """Ketik kode + klik btn-search via JS. Return True kalau row kode muncul."""
     reframe(driver, fr)
@@ -1676,21 +1725,39 @@ def main():
     say_step("Frame list", "OK")
 
     # v8.14 FIX: Cleanup state sebelum proses first item.
-    # Root cause "first item always fail": connect_chrome() connect ke EXISTING Chrome
-    # (line 310 pakai debuggerAddress). State Chrome = state terakhir user. Kalau user
-    # tinggal detail form SJ lain kebuka sebelum run tool, item 1 mulai dengan state kotor:
-    #   - #btnCommentAttachment dari SJ lama masih visible
-    #   - JS_DETAIL_OPEN return true berdasar tombol stale, BUKAN detail 03763 kebuka
-    #   - click_comment_attachment klik tombol stale → dropdown nggak reliable → E_DROPDOWN
-    # Item 2+ selalu succeed karena recover_to_list jalan setelah item 1.
-    # Fix: panggil recover_to_list sebelum loop → item 1 mulai dengan state clean.
-    # Pakai kode placeholder "INIT" — close_detail_tab nggak nemu tab dengan kode INIT,
-    # return True, lalu close_attachment_overlay + btnToggleList jalan.
+    # Root cause (verified via diagnostic dump):
+    #   connect_chrome() connect ke EXISTING Chrome (debuggerAddress).
+    #   State Chrome = state terakhir user. Kalau user tinggal detail tab SJ lain
+    #   kebuka sebelum run tool (text='Data Baru' atau kode SJ lama), item 1 mulai
+    #   dengan state KOTOR: 2-3 tabs kebuka → dropdown btnCommentAttachment click
+    #   nggak reliable → E_DROPDOWN.
+    #
+    # PREVIOUS FIX (v8.14 first attempt): recover_to_list(driver, "INIT").
+    # GAGAL karena close_detail_tab hanya cari tab dengan text include kode "INIT".
+    # Tab "Data Baru" (sisa session lama) nggak match → return True early (false success)
+    # tanpa close apapun. Diagnostic POST_CLEANUP prove: tab count tetap 2.
+    #
+    # NEW FIX (v8.14 second attempt): close_all_detail_tabs(driver).
+    # Function ini scan SEMUA i.icon-cancel-2.smaller visible + click satu-satu.
+    # Tidak butuh kode — close tab apapun yang ada tombol close-nya.
+    # Setelah close all, baru click btnToggleList utk ensure list view active.
     say_step("Cleanup state")
     try:
         # Dump pre-cleanup state utk verify hipotesis (ada berapa tab? btn visible?)
         dump_state_snapshot(driver, "PRE_CLEANUP")
-        recover_to_list(driver, "INIT")
+        # Step 1: tutup attachment overlay (kalau ada)
+        close_attachment_overlay(driver, timeout=3)
+        # Step 2: close SEMUA detail tab (NEW v8.14 — replaces recover_to_list("INIT"))
+        closed = close_all_detail_tabs(driver, max_close=10)
+        say(f"  [cleanup] closed {closed} leftover detail tab(s)")
+        # Step 3: click btnToggleList utk ensure list view active
+        try:
+            switch_top(driver)
+            btn = driver.find_element(By.CSS_SELECTOR, "button[name='btnToggleList']")
+            if btn:
+                smart_click(driver, btn)
+                time.sleep(1)
+        except: pass
         say_step("Cleanup state", "OK")
         # Dump post-cleanup state utk verify cleanup berhasil
         dump_state_snapshot(driver, "POST_CLEANUP")
