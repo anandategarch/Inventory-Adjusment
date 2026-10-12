@@ -675,34 +675,44 @@ def screenshot_fail(driver, kode, label):
 # ============================================================
 JS_CLICK_FIRST_TAB_CLOSE = JS_VIS + """
 return (function(){
-  // v8.14.1 DEFENSIVE: HANYA close SUB-tab (detail SJ form), JANGAN close MAIN module tab.
-  // Root cause v8.14 bug: selector `i.icon-cancel-2.smaller, i[class*="icon-cancel-2"]`
-  // kelebaran — match juga tombol close di MAIN module tab (e.g., "Pemindahan Barang").
-  // Akibatnya: main tab ke-close → search box hilang → semua item fail E_SEARCH.
+  // v8.14.2 RE-DESIGN: close HANYA sub-tab dengan text pattern SJ.
   //
-  // Fix: 3 defensive layers:
-  //   1. Skip kalau close button ada di dalam ancestor `div.module-tab` (main nav)
-  //   2. Skip kalau close button BUKAN di dalam ancestor `div.form-tab-title` (sub-tab)
-  //   3. Skip kalau sub-tab ancestor text kosong (defensive — hanya close tab dengan text)
+  // Pembelajaran dari v8.14.1 (gagal):
+  //   - Asumsi `div.module-tab` = MAIN nav → SALAH
+  //   - Di Accurate UI, `div.module-tab` = CONTAINER sub-tab strip (parent dari sub-tabs)
+  //   - `div.form-tab-title` = individual sub-tab (child)
+  //   - Layer 1 v8.14.1 skip SEMUA close button di dalam `div.module-tab` → akhirnya
+  //     close 0 sub-tab → "Data Baru" leftover TETAP ADA → item 1 fail.
+  //
+  // Pembelajaran dari v8.14 attempt 2 (juga gagal):
+  //   - Tanpa Layer 1, selector `i[class*="icon-cancel-2"]` kelebaran → match
+  //     close button di tempat lain (modal/popup/main tab) → MENUTUP MENU UTAMA.
+  //
+  // v8.14.2 STRATEGY: pakai 2 layer yang tepat:
+  //   Layer A: close button harus berada di dalam `div.form-tab-title` ancestor.
+  //           Ini pastikan kita HANYA close individual sub-tab, BUKAN container/menu.
+  //   Layer B: sub-tab ancestor text harus match pattern SJ:
+  //           - starts with 'Data Baru' (placeholder unsaved SJ)
+  //           - starts with 'IT.' (kode SJ)
+  //           Kalau text kosong / beda pattern → SKIP (defensive).
   var btns = document.querySelectorAll('i.icon-cancel-2.smaller, i[class*="icon-cancel-2"]');
   for (var i=0;i<btns.length;i++){
     var b = btns[i];
     if (!vis(b)) continue;
     
-    // Layer 1: cek ancestor utk MAIN module tab. Kalau ada ancestor dgn class module-tab,
-    // ini MAIN nav (e.g., "Pemindahan Barang") → SKIP, jangan close.
-    var mainAncestor = b.closest('div.module-tab, .module-tab, li.module-tab, .main-tab, .app-tab');
-    if (mainAncestor) continue;
-    
-    // Layer 2: cek ancestor utk SUB-tab (detail form). Kalau TIDAK ada ancestor sub-tab,
-    // ini bukan detail form tab → SKIP (defensive — jangan close yang tidak dikenali).
-    var subAncestor = b.closest('div.form-tab-title, .form-tab, li.form-tab-title, .sub-tab, .trans-detail-tab, .form-tabs');
+    // Layer A: cari ancestor sub-tab (form-tab-title).
+    // Kalau TIDAK ada → ini bukan sub-tab close button → SKIP.
+    var subAncestor = b.closest('div.form-tab-title, .form-tab, li.form-tab-title, .trans-detail-tab');
     if (!subAncestor) continue;
     
-    // Layer 3: cek text dari sub-tab ancestor. Kalau text kosong, SKIP
-    // (defensive — hanya close sub-tab yang punya text seperti "Data Baru" / "IT.xxx").
+    // Layer B: cek text pattern sub-tab.
     var subText = (subAncestor.innerText || '').trim();
-    if (!subText) continue;
+    if (!subText) continue;  // skip text kosong (defensive)
+    // Hanya close sub-tab yang match pattern SJ:
+    //   - 'Data Baru ...' (unlintil SJ, sering muncul saat user buka SJ baru tanpa save)
+    //   - 'IT.xxxx' (kode SJ)
+    var isSJPattern = (subText.indexOf('Data Baru') === 0) || (subText.indexOf('IT.') === 0);
+    if (!isSJPattern) continue;  // skip — bukan SJ detail tab
     
     try {
       b.scrollIntoView({block:'center'});
@@ -710,10 +720,10 @@ return (function(){
       ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(t){
         try { b.dispatchEvent(new MouseEvent(t, init)); } catch(e){}
       });
-      return true;  // success, klik 1 sub-tab
+      return true;  // success, close 1 sub-tab
     } catch(e) { continue; }
   }
-  return false;  // no more visible sub-tab close buttons (atau semua sudah di-skip defensive)
+  return false;  // no more SJ-pattern sub-tab to close
 })();
 """
 
