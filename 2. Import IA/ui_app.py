@@ -1,6 +1,30 @@
 """
-ui_app.py — tampilan aplikasi Import IA (v5.4, pasangan accurate_bot.py v4.10).
+ui_app.py — tampilan aplikasi Import IA (v5.5, pasangan accurate_bot.py v4.11).
 Tab: Otomasi | Database COA & Keterangan | Download Draft IA | Download SJ GIS | Screen Shot Power BI.
+
+v5.5: FIX "Chrome 9222 tidak terdeteksi padahal sudah klik tombol Buka Chrome":
+  ROOT CAUSE (deep): Chrome TIDAK PERNAH error kalau gagal bind port debug —
+  jendela tetap terbuka normal, tapi DevTools tidak pernah aktif. Gagal bind
+  terjadi kalau: (a) port 9222 dipegang PROSES LAIN (bukti dari log user:
+  cek socket v8.13 bilang port TERBUKA, tapi chromedriver bilang 'chrome not
+  reachable' → yang listen bukan Chrome yang sehat); atau (b) policy
+  perusahaan DevToolsRemoteDebuggingAllowed=0 memblokir debugging total.
+  v5.3/v5.4 hanya bunuh chrome lama + relaunch — tidak menyelesaikan (a)/(b).
+  PERBAIKAN:
+  1. DIAGNOSIS JUJUR: port_owner(port) — netstat -ano + tasklist → log persis
+     NAMA PROSES + PID yang duduk di tiap kandidat port. User akhirnya tahu
+     'deep ada apa' di port 9222-nya.
+  2. AUTO PORT-SWITCH: kalau 9222 dipakai proses lain → Chrome debug otomatis
+     diluncurkan di port bebas berikutnya (9223/9224/9225). Port tersimpan di
+     ui_settings.json, disinkronkan ke: label UI, os.environ['IA_DEBUG_PORT']
+     (semua subprocess: download_sj_gis.py / unduh_xls_loop.py /
+     filter_pembuat_data.py mewarisi), dan bot.DEBUG_PORT (tab Otomasi).
+  3. _sj_check_chrome() MULTI-PORT: cek port tersimpan dulu, lalu semua
+     kandidat — Chrome hidup di port mana pun tetap terdeteksi.
+  4. [FAIL] jujur lengkap: cetak pemilik port + perintah reg query utk cek
+     policy DevToolsRemoteDebuggingAllowed + perintah launch manual utk
+     melihat error Chrome langsung.
+  5. Tombol diganti nama 'Buka Chrome Debug' (port aktual tampil di label).
 
 v5.4: FIX "MULAI.bat lama banget / UI tak muncul-muncul":
   1. [BUG KRITIS v5.3] REQUIRED_BOT_VERSION masih "4.8" padahal accurate_bot
@@ -189,7 +213,7 @@ from tkinter import filedialog, messagebox, ttk
 # dari main.py lama). Kalau import/version gagal -> messagebox dialog (bukan traceback).
 try:
     import accurate_bot as bot
-    REQUIRED_BOT_VERSION = "4.10"
+    REQUIRED_BOT_VERSION = "4.11"
     if getattr(bot, "BOT_VERSION", None) != REQUIRED_BOT_VERSION:
         raise RuntimeError(
             "Versi file TIDAK SEPASANG.\n\n"
@@ -224,6 +248,63 @@ C_HEADER  = "#172033"
 C_FOOTER  = "#e2e8f0"
 C_INFO_BG = "#f8fafc"
 C_TERM_BG = "#0b1220"
+
+# ============================================================
+# PORT DEBUG CHROME (v5.5: multi-port + diagnosis + auto-switch)
+# ============================================================
+# Chrome TIDAK error kalau gagal bind port debug (port dipakai proses lain /
+# diblokir policy) — jendela tetap terbuka normal, DevTools tidak pernah
+# aktif. Karena itu kandidat port disiapkan lebih dari satu: kalau 9222
+# dipakai proses lain, Chrome debug otomatis diluncurkan di port bebas
+# berikutnya. Semua tool (UI + subprocess + bot) disinkronkan lewat
+# IA_DEBUG_PORT / bot.DEBUG_PORT — lihat _sj_apply_debug_port.
+DEBUG_PORT_CANDIDATES = (9222, 9223, 9224, 9225)
+
+def devtools_probe(port, timeout=2.0):
+    """(ok, info) — True hanya kalau Chrome DevTools di `port` BETUL-BETUL
+    menjawab /json/version dengan JSON berisi "Chrome/...". Ini satu-satunya
+    cek yang jujur: port TCP kebuka ≠ Chrome hidup (proses lain di port itu
+    lolos cek socket → chromedriver gagal 'chrome not reachable')."""
+    try:
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/json/version", timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8", "replace"))
+        browser = str(data.get("Browser", ""))
+        if "Chrome" in browser:
+            return True, browser
+        return False, f"yang menjawab bukan Chrome ({browser!r})"
+    except Exception as e:
+        return False, type(e).__name__
+
+def port_owner(port):
+    """(pid, nama_proses) yang LISTEN di `port`, atau None. Windows:
+    netstat -ano + tasklist. Dipakai untuk DIAGNOSIS JUJUR — menjawab 'deep
+    ada apa di port 9222': nama program + PID yang menumpang port itu."""
+    if sys.platform != "win32":
+        return None
+    try:
+        out = subprocess.run(["netstat", "-ano", "-p", "TCP"],
+                             capture_output=True, text=True, timeout=10).stdout or ""
+        pid = None
+        for line in out.splitlines():
+            parts = line.split()
+            # kolom: Proto Local Foreign State PID — cek baris LISTENING saja,
+            # dan hanya alamat LOKAL (bukan kolom Foreign Address).
+            if len(parts) >= 5 and parts[3] == "LISTENING" \
+                    and parts[1].rstrip("]").endswith(f":{port}"):
+                pid = parts[4]
+                break
+        if not pid:
+            return None
+        tl = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"],
+                            capture_output=True, text=True, timeout=10).stdout or ""
+        for line in tl.splitlines():
+            tokens = line.split()
+            if len(tokens) >= 2 and tokens[1] == pid:
+                return pid, tokens[0]
+        return pid, "?"
+    except Exception:
+        return None
 
 
 # ============================================================
@@ -561,6 +642,12 @@ class AutoImportApp(tk.Tk):
         self.db_meta = {"files": [], "total_rows": 0}
         self.after(150, lambda: self._load_db(silent=True))
         self._detect_dl_folder()
+        # v5.5: sinkronkan port debug tersimpan → env IA_DEBUG_PORT (semua
+        # subprocess UI mewarisi env) + bot.DEBUG_PORT (tab Otomasi).
+        # _sj_check_chrome()/_sj_launch_chrome() bisa ganti port otomatis
+        # nanti; setiap pergantian lewat _sj_apply_debug_port().
+        if getattr(self, "sj_debug_port", None):
+            self._sj_apply_debug_port(self.sj_debug_port, persist=False)
         self.after(100, self._drain_queue)
         self.after(500, self._refresh_summary_loop)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -896,15 +983,17 @@ class AutoImportApp(tk.Tk):
                                       justify="left", anchor="w", bg=C_INFO_BG, fg="#475569",
                                       padx=12, pady=8, font=F_BODY)
         self.sj_script_lbl.grid(row=1, column=0, sticky="ew", padx=14, pady=(6, 4))
-        self.sj_chrome_lbl = tk.Label(sj_ctl_card, text="Chrome 9222: memeriksa...",
+        self.sj_chrome_lbl = tk.Label(sj_ctl_card, text="Chrome debug: memeriksa...",
                                      justify="left", anchor="w", bg=C_INFO_BG, fg="#475569",
                                      padx=12, pady=8, font=F_BODY)
         self.sj_chrome_lbl.grid(row=2, column=0, sticky="ew", padx=14, pady=(0, 6))
 
         sj_ctl_btns = tk.Frame(sj_ctl_card, bg=C_CARD)
         sj_ctl_btns.grid(row=3, column=0, sticky="ew", padx=14, pady=(0, 6))
-        # "Buka Chrome 9222" tombol paling menonjol (paling sering dipakai utk mulai kerja).
-        ttk.Button(sj_ctl_btns, text="🌐  Buka Chrome 9222",
+        # "Buka Chrome Debug" tombol paling menonjol (paling sering dipakai utk mulai kerja).
+        # v5.5: nama tidak lagi mengunci '9222' — kalau 9222 dipakai proses lain,
+        # tombol ini otomatis pakai port bebas berikutnya (port tampil di label).
+        ttk.Button(sj_ctl_btns, text="🌐  Buka Chrome Debug",
                    style="Success.TButton",
                    command=self._sj_launch_chrome).pack(side="left", padx=(0, 8))
         # v5.2: "Deteksi Ulang" + "Cek Chrome" buttons removed — auto-detect
@@ -982,6 +1071,9 @@ class AutoImportApp(tk.Tk):
 
         # ---- Inisialisasi indikator SJ (auto-detect script + cek chrome + load kodes) ----
         self._sj_detect_script()
+        # v5.5: port debug tersimpan dari run terakhir (bisa berubah otomatis
+        # kalau 9222 dipakai proses lain). _load_sj_settings() membacanya.
+        self.sj_debug_port = 9222
         # v5.4: cek Chrome DITUNDA via after(300) — ini cek jaringan (urllib,
         # timeout 2s kalau ada zombie di 9222); jangan blok pembangunan UI.
         self.after(300, self._sj_check_chrome)
@@ -1301,52 +1393,86 @@ class AutoImportApp(tk.Tk):
             text="Script: download_sj_gis.py — ✗ tidak ditemukan", fg="#dc2626")
         return False
 
-    def _sj_check_chrome(self):
-        """Check Chrome DevTools at 127.0.0.1:9222 — HONEST (v5.3): cek
-        /json/version, bukan socket TCP mentah. Port kebuka ≠ Chrome hidup
-        (proses lain di 9222 / Chrome zombie) — dua-duanya bikin chromedriver
-        gagal 'chrome not reachable' beberapa saat kemudian."""
+    def _sj_apply_debug_port(self, port, persist=True):
+        """v5.5: SATU SUMBER KEBENARAN port debug Chrome. Setiap kali port
+        berubah (dimuat dari settings / ketemu Chrome hidup di port lain /
+        auto-switch karena 9222 dipakai proses lain), panggil ini — sinkron ke:
+          - self.sj_debug_port (label & pre-check UI)
+          - os.environ['IA_DEBUG_PORT'] (SEMUA subprocess UI mewarisi env:
+            download_sj_gis.py / unduh_xls_loop.py / filter_pembuat_data.py)
+          - bot.DEBUG_PORT (tab Otomasi, dipakai in-process)
+          - ui_settings.json (persist, supaya run berikutnya langsung benar)"""
         try:
-            with urllib.request.urlopen(
-                    "http://127.0.0.1:9222/json/version", timeout=2.0) as r:
-                data = json.loads(r.read().decode("utf-8", "replace"))
-            browser = str(data.get("Browser", ""))
-            if "Chrome" in browser:
-                ver = browser.split("/")[-1].strip()
-                self.sj_chrome_lbl.configure(
-                    text=f"Chrome 9222: ✓ {ver}", fg="#16a34a")
-                return True
-            self.sj_chrome_lbl.configure(
-                text="Chrome 9222: ✗ bukan Chrome", fg="#dc2626")
-            return False
+            self.sj_debug_port = int(port)
+        except Exception:
+            return
+        os.environ["IA_DEBUG_PORT"] = str(self.sj_debug_port)
+        try:
+            bot.DEBUG_PORT = self.sj_debug_port
         except Exception:
             pass
-        self.sj_chrome_lbl.configure(text="Chrome 9222: ✗ belum aktif", fg="#dc2626")
+        if persist:
+            try:
+                data = load_settings()
+                data["sj_debug_port"] = self.sj_debug_port
+                save_settings(data)
+            except Exception:
+                pass
+
+    def _sj_check_chrome(self):
+        """Check Chrome DevTools — HONEST + MULTI-PORT (v5.5): cek port
+        tersimpan dulu, lalu semua kandidat (9222/9223/9224/9225). Chrome
+        hidup di port mana pun tetap terdeteksi. Port kebuka saja TIDAK cukup:
+        Chrome harus menjawab /json/version (proses lain di port debug =
+        penyebab klasik 'chrome not reachable' mengejut)."""
+        ports = []
+        for p in [getattr(self, "sj_debug_port", None)] + list(DEBUG_PORT_CANDIDATES):
+            if p and p not in ports:
+                ports.append(p)
+        for port in ports:
+            ok, info = devtools_probe(port)
+            if ok:
+                if port != getattr(self, "sj_debug_port", None):
+                    self._sj_apply_debug_port(port)
+                ver = info.split("/")[-1].strip()
+                self.sj_chrome_lbl.configure(
+                    text=f"Chrome {port}: ✓ {ver}", fg="#16a34a")
+                return True
+        cur = getattr(self, "sj_debug_port", 9222)
+        self.sj_chrome_lbl.configure(text=f"Chrome {cur}: ✗ belum aktif", fg="#dc2626")
         return False
 
     def _sj_launch_chrome(self):
-        """Launch Chrome with debugging port 9222 — ROBUST + HONEST (v5.3).
-        Root cause tombol lama gagal: kalau chrome.exe SUDAH jalan dengan profil
-        C:\\ChromeDebugProfile TANPA port 9222 (sisa session lama / Chrome
-        relaunch sendiri setelah update), perintah launch baru hanya DITERUSKAN
-        ke instance lama lalu exit — port tidak pernah aktif, dan cek socket
-        mentah tetap bilang 'terhubung' (palsu). Urutan baru:
-          1. DevTools sudah hidup? → tidak relaunch (session login aman).
-          2. Tutup chrome.exe lama dengan profil debug (surgical — Chrome
-             pribadi TIDAK disentuh).
-          3. Launch Chrome debug.
-          4. Poll /json/version maks 30s — sukses = log versi Chrome ASLI;
-             gagal = pesan jujur + langkah perbaikan yang bisa ditindaklanjuti."""
-        # 1) Sudah hidup? Jangan relaunch — relaunch = buang session login user.
+        """Launch Chrome debug — ROBUST + HONEST + AUTO-PORT (v5.5).
+        ROOT CAUSE 'Chrome 9222 tidak terdeteksi padahal Chrome kebuka':
+        Chrome TIDAK PERNAH error kalau gagal bind port debug — jendela tetap
+        terbuka normal tapi DevTools tidak pernah aktif (port dipakai proses
+        lain / diblokir policy perusahaan). Urutan baru:
+          1. DevTools sudah hidup (port mana pun)? → tidak relaunch.
+          2. DIAGNOSIS jujur: netstat+tasklist → log proses apa + PID yang
+             duduk di tiap kandidat port (menjawab 'deep ada apa di 9222').
+          3. Tutup chrome.exe debug lama (profil sama tanpa port = launch baru
+             diteruskan ke instance lama → port tidak pernah aktif).
+          4. Pilih port BEBAS pertama (9222→9225); 9222 dipakai proses lain →
+             otomatis pindah port + log jelas.
+          5. Launch + poll /json/version 30s di port terpilih; gagal = [FAIL]
+             lengkap: pemilik port + reg query (policy) + perintah manual."""
+        # 1) Sudah hidup di port mana pun? Jangan relaunch (session login aman).
         if self._sj_check_chrome():
-            self._sj_log_line("[OK] Chrome 9222 sudah aktif — tidak diluncurkan ulang.")
-            self.sj_status_lbl.configure(text="Chrome 9222 siap. Klik Mulai Download.")
+            self._sj_log_line(f"[OK] Chrome debug sudah aktif di port {self.sj_debug_port} — tidak diluncurkan ulang.")
+            self.sj_status_lbl.configure(text=f"Chrome {self.sj_debug_port} siap. Klik Mulai Download.")
             return
-        # 2) Tutup instance Chrome debug lama (profil ChromeDebugProfile /
+        # 2) DIAGNOSIS jujur — siapa yang duduk di kandidat port? Ini jawaban
+        #    'deep ada apa': nama proses + PID ditampilkan apa adanya.
+        for p in DEBUG_PORT_CANDIDATES:
+            owner = port_owner(p)
+            if owner:
+                self._sj_log_line(f"[DIAG] Port {p} dipakai proses lain: {owner[1]} (PID {owner[0]})")
+        # 3) Tutup instance Chrome debug lama (profil ChromeDebugProfile /
         #    warisan ChromeDebug_Accurate). Tanpa langkah ini, launch baru
         #    diteruskan ke instance lama yang TANPA port → port tidak aktif.
         try:
-            self._sj_log_line("[INFO] Menutup Chrome debug lama (instance tanpa port 9222)...")
+            self._sj_log_line("[INFO] Menutup Chrome debug lama (instance tanpa port debug)...")
             subprocess.run(
                 ["powershell", "-NoProfile", "-Command",
                  "Get-CimInstance Win32_Process -Filter 'Name=''chrome.exe''' | "
@@ -1357,7 +1483,20 @@ class AutoImportApp(tk.Tk):
             time.sleep(1)
         except Exception as e:
             self._sj_log_line(f"[WARNING] Gagal menutup Chrome lama: {e}")
-        # 3) Cari chrome.exe di lokasi umum (Program Files / x86 / LOCALAPPDATA / PATH).
+        # 4) Pilih port BEBAS pertama — kalau 9222 dipakai proses lain,
+        #    Chrome debug otomatis pindah ke port berikutnya (9223/9224/9225).
+        chosen = None
+        for p in DEBUG_PORT_CANDIDATES:
+            if port_owner(p) is None:
+                chosen = p
+                break
+        if chosen is None:
+            chosen = DEBUG_PORT_CANDIDATES[0]
+            self._sj_log_line(f"[WARN] Semua port {DEBUG_PORT_CANDIDATES} dipakai proses lain — "
+                              f"tetap coba port {chosen}.")
+        elif chosen != 9222:
+            self._sj_log_line(f"[INFO] Port 9222 dipakai proses lain → otomatis pakai port {chosen}.")
+        # 5) Cari chrome.exe di lokasi umum (Program Files / x86 / LOCALAPPDATA / PATH).
         chrome_paths = [
             os.path.join(os.environ.get("PROGRAMFILES", "C:\\Program Files"),
                          "Google", "Chrome", "Application", "chrome.exe"),
@@ -1389,7 +1528,7 @@ class AutoImportApp(tk.Tk):
         try:
             subprocess.Popen([
                 chrome_path,
-                "--remote-debugging-port=9222",
+                f"--remote-debugging-port={chosen}",
                 "--user-data-dir=C:\\ChromeDebugProfile",
                 "--no-first-run",
                 "--no-default-browser-check",
@@ -1399,36 +1538,43 @@ class AutoImportApp(tk.Tk):
                 "--disable-renderer-backgrounding",              # keep rendering priority high
                 "https://accurate.id",
             ])
-            self._sj_log_line("[INFO] Chrome diluncurkan dengan port 9222 — menunggu DevTools menjawab (maks 30s)...")
-            self.sj_status_lbl.configure(text="Chrome launching... cek DevTools...")
-            # 4) Poll /json/version sampai jawab (bukan cuma cek socket).
+            self._sj_log_line(f"[INFO] Chrome diluncurkan dengan port debug {chosen} — menunggu DevTools menjawab (maks 30s)...")
+            self.sj_status_lbl.configure(text=f"Chrome launching (port {chosen})...")
+            # 6) Poll /json/version di PORT TERPILIH (bukan cuma cek socket).
             def _wait_devtools():
                 deadline = time.time() + 30
                 last_err = ""
                 while time.time() < deadline:
-                    try:
-                        with urllib.request.urlopen(
-                                "http://127.0.0.1:9222/json/version", timeout=2.0) as r:
-                            data = json.loads(r.read().decode("utf-8", "replace"))
-                        browser = str(data.get("Browser", ""))
-                        if "Chrome" in browser:
-                            self._sj_check_chrome()  # refresh label + return True
-                            self._sj_log_line(f"[OK] Chrome 9222 hidup — {browser}. Siap download.")
-                            self.sj_status_lbl.configure(text="Chrome 9222 siap. Klik Mulai Download.")
-                            return
-                        last_err = f"yang menjawab bukan Chrome ({browser!r})"
-                    except Exception as e:
-                        last_err = type(e).__name__
+                    ok, info = devtools_probe(chosen)
+                    if ok:
+                        self._sj_apply_debug_port(chosen)  # persist + env + bot + label
+                        self._sj_check_chrome()            # refresh label (tampil versi)
+                        self._sj_log_line(f"[OK] Chrome {chosen} hidup — {info}. Siap download.")
+                        self.sj_status_lbl.configure(text=f"Chrome {chosen} siap. Klik Mulai Download.")
+                        return
+                    last_err = info
                     time.sleep(1)
+                # FAIL — diagnosis lengkap & jujur (bukan 'coba lagi' tanpa arah).
+                owner = port_owner(chosen)
+                owner_msg = (f"yang duduk di port {chosen}: {owner[1]} (PID {owner[0]})"
+                             if owner else "tidak ada yang listen di port itu (Chrome gagal bind / tidak jalan)")
                 self._sj_log_line(
-                    "[FAIL] Chrome TIDAK menjawab http://127.0.0.1:9222/json/version "
-                    f"dalam 30 detik ({last_err}).\n"
-                    "  → Cek manual: buka http://127.0.0.1:9222/json/version di browser "
+                    f"[FAIL] Chrome TIDAK menjawab http://127.0.0.1:{chosen}/json/version "
+                    f"dalam 30 detik ({last_err}); {owner_msg}.\n"
+                    f"  → Cek manual: buka http://127.0.0.1:{chosen}/json/version di browser "
                     "(harus tampil JSON berisi \"Chrome/...\").\n"
-                    "  → Kalau Chrome kebuka tapi JSON tidak muncul: tutup SEMUA Chrome "
-                    "(Task Manager → end task chrome.exe), lalu klik 'Buka Chrome 9222' lagi.")
-                self.sj_status_lbl.configure(text="Chrome 9222 GAGAL — lihat log proses.")
-                self.sj_chrome_lbl.configure(text="Chrome 9222: ✗ gagal", fg="#dc2626")
+                    "  → Kalau Chrome kebuka tapi JSON tidak muncul:\n"
+                    "     (1) tutup SEMUA Chrome (Task Manager → end task chrome.exe), "
+                    "klik 'Buka Chrome Debug' lagi;\n"
+                    "     (2) cek policy yang memblokir remote debugging (laptop kantor sering "
+                    "memasang ini) — jalankan di CMD:\n"
+                    "       reg query HKLM\\SOFTWARE\\Policies\\Google\\Chrome /v DevToolsRemoteDebuggingAllowed\n"
+                    "     kalau nilainya 0 → debugging DIBLOKIR IT/admin — itu sebabnya port "
+                    "tidak pernah aktif;\n"
+                    "     (3) jalankan manual dan lihat error Chrome langsung:\n"
+                    f"       chrome.exe --remote-debugging-port={chosen} --user-data-dir=\"C:\\ChromeDebugProfile\"")
+                self.sj_status_lbl.configure(text=f"Chrome {chosen} GAGAL — lihat log proses.")
+                self.sj_chrome_lbl.configure(text=f"Chrome {chosen}: ✗ gagal", fg="#dc2626")
             threading.Thread(target=_wait_devtools, daemon=True).start()
         except Exception as e:
             messagebox.showerror(APP_TITLE, f"Gagal meluncurkan Chrome: {e}", parent=self)
@@ -1556,15 +1702,18 @@ class AutoImportApp(tk.Tk):
                 parent=self)
             return
         if not self._sj_check_chrome():
+            p = getattr(self, "sj_debug_port", 9222)
             messagebox.showwarning(
                 APP_TITLE,
-                "Chrome debugging TIDAK menjawab http://127.0.0.1:9222/json/version.\n"
-                "(cek jujur v5.3 — port kebuka saja tidak cukup, Chrome harus\n"
+                f"Chrome debugging TIDAK menjawab http://127.0.0.1:{p}/json/version.\n"
+                "(cek jujur v5.5 — port kebuka saja tidak cukup, Chrome harus\n"
                 " benar-benar merespon DevTools.)\n\n"
-                "Klik tombol 'Buka Chrome 9222' — tombol sekarang menutup dulu\n"
-                "instance Chrome lama yang tanpa port, lalu meluncurkan ulang.\n\n"
+                "Klik tombol 'Buka Chrome Debug' — tombol sekarang: menutup dulu\n"
+                "instance Chrome lama tanpa port, MENDIAGNOSIS siapa pemilik\n"
+                "port (netstat), dan OTOMATIS pindah ke port bebas lain\n"
+                "kalau 9222 dipakai proses lain.\n\n"
                 "Atau jalankan manual:\n"
-                "  chrome.exe --remote-debugging-port=9222 "
+                f"  chrome.exe --remote-debugging-port={p} "
                 "--user-data-dir=\"C:\\ChromeDebugProfile\"",
                 parent=self)
             return
@@ -1611,6 +1760,7 @@ class AutoImportApp(tk.Tk):
         env = {**os.environ,
                "SJ_GIS_KODES": kodes_str,
                "IA_UI_MODE": "1",
+               "IA_DEBUG_PORT": str(getattr(self, "sj_debug_port", 9222)),  # v5.5: port aktual (auto-switch)
                "PYTHONIOENCODING": "utf-8"}
         try:
             proc = subprocess.Popen(
@@ -1661,15 +1811,21 @@ class AutoImportApp(tk.Tk):
         self.ui_queue.put(("sj_done", (None, total)))
 
     def _save_sj_settings(self):
-        """Save last kodes to ui_settings.json (merge with existing keys)."""
+        """Save last kodes + port debug ke ui_settings.json (merge)."""
         data = load_settings()
         data["sj_kodes"] = ", ".join(self.sj_kodes)
+        data["sj_debug_port"] = getattr(self, "sj_debug_port", 9222)  # v5.5
         if not save_settings(data):
             self.log("Gagal menyimpan sj_kodes ke ui_settings.json.", "WARN")
 
     def _load_sj_settings(self):
-        """Load last kodes from ui_settings.json, populate Text widget."""
+        """Load last kodes + port debug dari ui_settings.json."""
         data = load_settings()
+        # v5.5: port debug tersimpan (hasil auto-switch run terakhir).
+        try:
+            self.sj_debug_port = int(data.get("sj_debug_port") or 9222)
+        except Exception:
+            self.sj_debug_port = 9222
         kodes = (data.get("sj_kodes") or "").strip()
         if kodes:
             self.sj_kodes_text.delete("1.0", "end")
@@ -2716,6 +2872,6 @@ class AutoImportApp(tk.Tk):
 
 
 if __name__ == "__main__":
-    print(f"=== {APP_TITLE} — ui_app.py v5.4 (pasangan accurate_bot.py v4.10) ===")
+    print(f"=== {APP_TITLE} — ui_app.py v5.5 (pasangan accurate_bot.py v4.11) ===")
     app = AutoImportApp()
     app.mainloop()

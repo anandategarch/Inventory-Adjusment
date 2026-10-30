@@ -1,9 +1,11 @@
 """
-unduh_xls_loop.py  (v7.1 - FULL SPEED)
+unduh_xls_loop.py  (v7.2 - FULL SPEED)
 - TANPA delay tiruan-manusia; hanya wait fungsional (event-driven) + margin render tipis.
 - Suffix Keterangan dari kolom grid saat scroll (fallback textarea detail).
 - Cetak: Ctrl+P dulu, tombol Cetak fallback, retry Escape+Ctrl+P.
 - Circuit breaker + katalog error + rekap akhir.
+v7.2: MULTI-PORT — DEBUG_PORT dari env IA_DEBUG_PORT (default 9222).
+  UI v5.5 set env ini (auto-switch kalau 9222 dipakai proses lain).
 v7.1: HONEST Chrome check — fix 'cannot connect to chrome at 127.0.0.1:9222 /
   chrome not reachable'. v7 cek socket TCP mentah (bisa lolos palsu: proses lain
   di 9222 / Chrome zombie → gagal mengejut saat webdriver.Chrome()). Sekarang:
@@ -28,7 +30,7 @@ from selenium.common.exceptions import (
     WebDriverException, StaleElementReferenceException, ElementClickInterceptedException,
 )
 
-DEBUG_PORT = 9222
+DEBUG_PORT = int(os.environ.get("IA_DEBUG_PORT", "9222"))  # v7.2: port dari UI (auto port-switch)
 MAX_ROWS = 0
 MAX_CONSECUTIVE_FAIL = 3
 DELAY_BETWEEN_TRANSACTIONS = 1.5  # seconds — prevent Accurate rate-limit after 4+ rapid prints

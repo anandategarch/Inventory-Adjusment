@@ -1,7 +1,14 @@
 """
-download_sj_gis.py  (v8.15)
+download_sj_gis.py  (v8.16)
 =========================
 Download Surat Jalan (SJ) dari modul PEMINDAHAN BARANG Accurate Online (database GiS).
+
+PERBAIKAN v8.16 (dari v8.15):
+  - MULTI-PORT: DEBUG_PORT sekarang dibaca dari env IA_DEBUG_PORT (default
+    9222). UI v5.5 meng-set env ini otomatis: kalau port 9222 dipegang proses
+    lain, tombol 'Buka Chrome Debug' meluncurkan Chrome di port bebas
+    berikutnya (9223/9224/9225) dan semua subprocess tool mewarisi port itu.
+  - Semua log koneksi tetap JUJUR (menampilkan port aktual yang dipakai).
 
 PERBAIKAN v8.15 (dari v8.14):
   - TUJUAN: fix "session not created: cannot connect to chrome at 127.0.0.1:9222
@@ -331,7 +338,7 @@ from selenium.common.exceptions import (
 # ============================================================
 # CONFIG
 # ============================================================
-DEBUG_PORT = 9222
+DEBUG_PORT = int(os.environ.get("IA_DEBUG_PORT", "9222"))  # v8.16: port dari UI (auto port-switch)
 DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads")
 KODE_RE = re.compile(r"IT\.\d{4}\.\d{2}\.\d+")
 DL_EXTS = (".pdf", ".xls", ".xlsx", ".doc", ".docx", ".png", ".jpg", ".jpeg")

@@ -12,7 +12,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.options import Options
 
-PORT = 9222
+PORT = int(__import__("os").environ.get("IA_DEBUG_PORT", "9222"))  # v2: port dari UI (auto port-switch)
 KODE_DEF = "IT.2026.09.19805"
 
 def conn():

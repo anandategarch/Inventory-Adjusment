@@ -1,10 +1,15 @@
 """
-accurate_bot.py — logika otomasi Accurate Online (v4.10, pasangan ui_app.py v5.4).
+accurate_bot.py — logika otomasi Accurate Online (v4.11, pasangan ui_app.py v5.5).
 Flow terbukti: isi tanggal -> info -> upload -> konfirmasi -> simpan.
 Verifikasi ketat: tanggal, akun (harus sama target), cabang (reset + sama target).
 Pop-up: panduan upload diabaikan; hasil/error/stok diproses; LANJUTKAN otomatis.
 v4.7: database COA & Keterangan dibaca otomatis dari folder aplikasi.
 v4.8: branchSet verify pakai contains match (Accurate branch list ada kode prefix).
+v4.11: MULTI-PORT — DEBUG_PORT dibaca dari env IA_DEBUG_PORT (default 9222).
+  UI v5.5 menyinkronkan port aktual (auto-switch kalau 9222 dipakai proses
+  lain) via bot.DEBUG_PORT + env; semua fungsi chrome di file ini membaca
+  DEBUG_PORT global saat CALL TIME, jadi perubahan port dari UI langsung
+  efektif tanpa reload.
 v4.10: FAST STARTUP — import selenium sekarang LAZY (proxy _LazySelenium).
   Fix "MULAI.bat lama banget / UI tak muncul-muncul": selenium di-import di
   level atas file ini → ui_app.py (yang meng-import accurate_bot saat start)
@@ -82,8 +87,8 @@ By = _LazySelenium("selenium.webdriver.common.by", "By")
 WebDriverWait = _LazySelenium("selenium.webdriver.support.ui", "WebDriverWait")
 EC = _LazySelenium("selenium.webdriver.support", "expected_conditions")
 
-BOT_VERSION = "4.10"
-DEBUG_PORT = 9222
+BOT_VERSION = "4.11"
+DEBUG_PORT = int(os.environ.get("IA_DEBUG_PORT", "9222"))  # v4.11: disinkronkan UI v5.5 (auto port-switch)
 
 MODE_APPROVE = "APPROVE"
 MODE_DRAFT = "DRAFT"

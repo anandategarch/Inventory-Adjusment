@@ -1,7 +1,9 @@
 """
-filter_pembuat_data.py  (v9.2 - FAST EDITION)
+filter_pembuat_data.py  (v9.3 - FAST EDITION)
 Verifikasi via chip nilai individual di panel (anti chip-terpotong).
 Delay dipercepat tapi tetap acak; wait popup saran (1.2s) TIDAK dipangkas.
+v9.3: MULTI-PORT — DEBUG_PORT dari env IA_DEBUG_PORT (default 9222).
+  UI v5.5 set env ini (auto-switch kalau 9222 dipakai proses lain).
 v9.2: HONEST Chrome check + launch ROBUST — fix 'cannot connect to chrome at
   127.0.0.1:9222 / chrome not reachable' yang tetap muncul meski Chrome dibuka:
   - cek DevTools ASLI /json/version (bukan socket TCP mentah — port kebuka ≠
@@ -34,7 +36,7 @@ from selenium.common.exceptions import (
     ElementClickInterceptedException,
 )
 
-DEBUG_PORT = 9222
+DEBUG_PORT = int(os.environ.get("IA_DEBUG_PORT", "9222"))  # v9.3: port dari UI (auto port-switch)
 DEFAULT_BRANCHES = "RESTO.PWKTAM, RESTO.KWGGAL"
 
 LIST_DETECTOR = 'input[placeholder*="Ketik dan"], .slick-grid, [class*="slick-grid"]'
