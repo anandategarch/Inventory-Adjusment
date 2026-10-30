@@ -1,23 +1,39 @@
 """
-accurate_bot.py — logika otomasi Accurate Online (v4.8, pasangan ui_app.py v4.7).
+accurate_bot.py — logika otomasi Accurate Online (v4.9, pasangan ui_app.py v5.3).
 Flow terbukti: isi tanggal -> info -> upload -> konfirmasi -> simpan.
 Verifikasi ketat: tanggal, akun (harus sama target), cabang (reset + sama target).
 Pop-up: panduan upload diabaikan; hasil/error/stok diproses; LANJUTKAN otomatis.
 v4.7: database COA & Keterangan dibaca otomatis dari folder aplikasi.
 v4.8: branchSet verify pakai contains match (Accurate branch list ada kode prefix).
+v4.9: HONEST Chrome check + launch ROBUST — fix 'cannot connect to chrome at
+  127.0.0.1:9222 / chrome not reachable' yang tetap muncul meski Chrome dibuka:
+  - is_port_open() sekarang cek DevTools ASLI /json/version (socket TCP mentah
+    bisa lolos palsu: proses lain di 9222 / Chrome zombie → chromedriver gagal
+    beberapa saat kemudian).
+  - launch_chrome_silent(): kalau DevTools sudah hidup → TIDAK relaunch (session
+    login aman); tutup dulu instance Chrome debug lama (instance dengan profil
+    yang sama TANPA port membuat perintah launch baru hanya diteruskan ke
+    instance lama lalu exit — port tidak pernah aktif); poll /json/version
+    maks 20s — return True hanya kalau Chrome betul-betul menjawab.
+  - Profil debug DIUNIFIKASI ke C:\\ChromeDebugProfile (v4.8 dan sebelumnya
+    %TEMP%\\ChromeDebug_Accurate — DUA profil berebut port 9222 dengan tab
+    Download SJ GIS; hanya satu yang bind, koneksi bisa nyasar/mati).
+    Sekarang SATU profil: login Accurate cukup sekali untuk semua tab/tools.
 """
 import os
 import re
+import json
 import socket
 import subprocess
 import time
 import random
+import urllib.request
 
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-BOT_VERSION = "4.8"
+BOT_VERSION = "4.9"
 DEBUG_PORT = 9222
 
 MODE_APPROVE = "APPROVE"
@@ -69,15 +85,52 @@ def human_pause(min_s=0.4, max_s=1.2):
 
 
 # ============================================================
-# CHROME
+# CHROME (v4.9: HONEST check + ROBUST launch)
 # ============================================================
-def is_port_open(port):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.5)
-        return s.connect_ex(("127.0.0.1", port)) == 0
+# Profil debug UNIFIED: satu profil untuk SEMUA tab/tools — tab SJ GIS
+# (ui_app v5.3), tab Otomasi (ini), Download Draft IA. Dua profil berbeda
+# dengan port 9222 yang sama = konflik (hanya satu yang bind; koneksi nyasar).
+CHROME_DEBUG_PROFILE = r"C:\ChromeDebugProfile"
 
+def is_port_open(port):
+    """HONEST check (v4.9): True hanya kalau Chrome DevTools di port ini
+    BETUL-BETUL menjawab /json/version. Cek socket TCP lama bisa lolos palsu
+    (proses lain di 9222 / Chrome zombie: port listen tapi DevTools mati) →
+    chromedriver gagal 'chrome not reachable' beberapa saat kemudian."""
+    try:
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/json/version", timeout=2.0) as r:
+            data = json.loads(r.read().decode("utf-8", "replace"))
+        return "Chrome" in str(data.get("Browser", ""))
+    except Exception:
+        return False
+
+def kill_stale_debug_chrome():
+    """Tutup HANYA chrome.exe yang jalan dengan profil debug tool ini
+    (ChromeDebugProfile / warisan ChromeDebug_Accurate). Chrome PRIBADI
+    (profil default user) TIDAK disentuh — surgical via PowerShell.
+    WAJIB sebelum launch: instance lama dengan profil yang SAMA tapi TANPA
+    port 9222 bikin perintah launch baru hanya 'diteruskan' ke instance lama
+    lalu exit — port tidak pernah aktif (root cause 'chrome not reachable')."""
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process -Filter 'Name=''chrome.exe''' | "
+             "Where-Object { $_.CommandLine -like '*ChromeDebugProfile*' -or "
+             "$_.CommandLine -like '*ChromeDebug_Accurate*' } | "
+             "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"],
+            capture_output=True, timeout=15)
+        time.sleep(1)
+    except Exception:
+        pass
 
 def launch_chrome_silent():
+    """Launch Chrome debug port 9222 — ROBUST (v4.9).
+    Return True HANYA kalau DevTools menjawab /json/version
+    (bukan sekadar 'Popen tidak exception' seperti v4.8 dan sebelumnya)."""
+    if is_port_open(DEBUG_PORT):
+        return True  # sudah hidup — jangan relaunch (relaunch = buang session login!)
+    kill_stale_debug_chrome()
     candidates = [
         os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
         os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
@@ -86,16 +139,22 @@ def launch_chrome_silent():
     chrome = next((p for p in candidates if os.path.exists(p)), None)
     if not chrome:
         return False
-    user_data = os.path.expandvars(r"%TEMP%\ChromeDebug_Accurate")
     try:
         subprocess.Popen(
             [chrome, f"--remote-debugging-port={DEBUG_PORT}",
-             f"--user-data-dir={user_data}", "https://accurate.id"],
+             f"--user-data-dir={CHROME_DEBUG_PROFILE}",
+             "--no-first-run", "--no-default-browser-check",
+             "--hide-crash-restore-bubble",
+             "https://accurate.id"],
             creationflags=0x08000000
         )
-        return True
     except Exception:
         return False
+    for _ in range(20):
+        time.sleep(1)
+        if is_port_open(DEBUG_PORT):
+            return True
+    return False
 
 
 # ============================================================

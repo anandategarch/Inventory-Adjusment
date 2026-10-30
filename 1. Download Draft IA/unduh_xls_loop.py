@@ -1,15 +1,22 @@
 """
-unduh_xls_loop.py  (v7 - FULL SPEED)
+unduh_xls_loop.py  (v7.1 - FULL SPEED)
 - TANPA delay tiruan-manusia; hanya wait fungsional (event-driven) + margin render tipis.
 - Suffix Keterangan dari kolom grid saat scroll (fallback textarea detail).
 - Cetak: Ctrl+P dulu, tombol Cetak fallback, retry Escape+Ctrl+P.
 - Circuit breaker + katalog error + rekap akhir.
+v7.1: HONEST Chrome check — fix 'cannot connect to chrome at 127.0.0.1:9222 /
+  chrome not reachable'. v7 cek socket TCP mentah (bisa lolos palsu: proses lain
+  di 9222 / Chrome zombie → gagal mengejut saat webdriver.Chrome()). Sekarang:
+  cek DevTools ASLI /json/version + retry chromedriver 3x + kode error E_CHROME
+  yang jujur (dulu pakai E_LIST — menyesatkan).
 """
 import os
 import re
 import sys
 import time
+import json
 import socket
+import urllib.request
 from datetime import datetime
 
 from selenium import webdriver
@@ -33,6 +40,8 @@ NOMOR_RE = re.compile(r"(?:IA\.\d{4}\.\d{2}\.\d+|DFT\.\d+)")
 
 ERROR_CATALOG = {
     "E_LIST": ("Grid list tidak ditemukan.", "Pastikan tab Penyesuaian Persediaan terbuka & login aktif."),
+    "E_CHROME": ("Chrome debugging 9222 tidak merespon /json/version.",
+                 "Klik 'Buka Chrome 9222' di tab Download SJ GIS (tombol menutup instance lama tanpa port dulu), login, lalu jalankan ulang. Cek manual: buka http://127.0.0.1:9222/json/version — harus tampil JSON berisi 'Chrome/...'."),
     "E_ROW": ("Baris transaksi tidak ditemukan / tidak bisa diklik.", "Grid mungkin belum selesai render. Coba jalankan ulang."),
     "E_DETAIL": ("Tab detail transaksi tidak terbuka.", "Klik manual baris sekali untuk memastikan halaman responsif."),
     "E_PRINT": ("Overlay report tidak muncul.", "Pastikan fokus di halaman detail; coba ulang siklus."),
@@ -550,14 +559,42 @@ def rename_with_suffix(path, suffix):
     except Exception:
         return path
 
+def devtools_version(timeout=2.0):
+    """(ok, info) — True hanya kalau Chrome DevTools BETUL-BETUL menjawab
+    /json/version. Cek socket TCP mentah bisa lolos palsu (v7 bug): proses lain
+    di 9222 / Chrome zombie → chromedriver gagal 'chrome not reachable'."""
+    try:
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{DEBUG_PORT}/json/version", timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8", "replace"))
+        browser = str(data.get("Browser", ""))
+        if "Chrome" in browser:
+            return True, browser
+        return False, f"yang listen port {DEBUG_PORT} bukan Chrome ({browser!r})"
+    except Exception as e:
+        return False, f"{type(e).__name__}"
+
 def connect_chrome():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.5)
-        if s.connect_ex(("127.0.0.1", DEBUG_PORT)) != 0:
-            raise AppError("E_LIST", f"port debugging {DEBUG_PORT} tidak aktif")
+    # v7.1: HONEST — cek DevTools asli (bukan cuma port TCP) + retry 3x.
+    ok, info = devtools_version()
+    if not ok:
+        raise AppError("E_CHROME", f"tidak merespon /json/version ({info})")
     opt = Options()
     opt.add_experimental_option("debuggerAddress", f"127.0.0.1:{DEBUG_PORT}")
-    return webdriver.Chrome(options=opt)
+    last = None
+    for attempt in range(1, 4):
+        try:
+            return webdriver.Chrome(options=opt)
+        except Exception as e:
+            last = e
+            ok2, info2 = devtools_version()
+            if not ok2:
+                raise AppError("E_CHROME",
+                    f"Chrome MATI saat chromedriver connect ({info2}) — jangan "
+                    "tutup Chrome debug selama tool berjalan")
+            time.sleep(3)
+    raise AppError("E_CHROME",
+        f"chromedriver session gagal 3x: {type(last).__name__}")
 
 def switch_path(driver, path):
     driver.switch_to.default_content()

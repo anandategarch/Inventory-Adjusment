@@ -1,7 +1,40 @@
 """
-download_sj_gis.py  (v8.14)
+download_sj_gis.py  (v8.15)
 =========================
 Download Surat Jalan (SJ) dari modul PEMINDAHAN BARANG Accurate Online (database GiS).
+
+PERBAIKAN v8.15 (dari v8.14):
+  - TUJUAN: fix "session not created: cannot connect to chrome at 127.0.0.1:9222
+    / chrome not reachable" yang TETAP muncul meski tombol 'Buka Chrome 9222'
+    sudah diklik, + buat semua log Chrome JUJUR.
+  - ROOT CAUSE (kenapa error tetap muncul meski Chrome dibuka):
+    1. Cek koneksi lama = socket TCP mentah (connect_ex). Port kebuka ≠ Chrome
+       hidup: proses lain bisa duduk di 9222, atau Chrome zombie (listen tapi
+       DevTools tidak merespon) → cek lolos PALSU → gagal mengejut saat
+       webdriver.Chrome() dipanggil.
+    2. Kalau chrome.exe SUDAH jalan dengan profil C:\\ChromeDebugProfile TANPA
+       port 9222 (sisa session lama / Chrome relaunch sendiri setelah update),
+       perintah launch baru cuma DITERUSKAN ke instance lama lalu exit →
+       port tidak pernah aktif. (Diperbaiki di ui_app.py v5.3: tombol
+       'Buka Chrome 9222' sekarang menutup instance lama dulu — surgical,
+       hanya profil debug, Chrome pribadi tidak disentuh — baru launch.)
+    3. Konflik 2 profil: tab Otomasi (accurate_bot.py lama) meluncurkan Chrome
+       dengan profil %TEMP%\\ChromeDebug_Accurate, tab SJ GIS pakai
+       C:\\ChromeDebugProfile — dua-duanya mau port 9222; hanya satu yang
+       menang, koneksi bisa nyasar/mati. Diperbaiki dengan UNIFIKASI satu
+       profil debug (accurate_bot v4.9 / ui_app v5.3).
+  - FIX (v8.15, script ini):
+    * connect_chrome() cek DevTools ASLI http://127.0.0.1:9222/json/version
+      (harus menjawab JSON berisi "Chrome/...") + RETRY 3x + log jujur
+      (versi Chrome ditampilkan).
+    * webdriver.Chrome() dibungkus retry 3x — kalau Chrome mati DI TENGAH
+      unduhan chromedriver (Selenium Manager ±1 menit setelah update Chrome),
+      kasih pesan jujur + exit bersih, BUKAN stacktrace mentah.
+    * Setelah session jadi: verify driver.title (round-trip asli ke Chrome).
+    * DIHAPUS: say_step("Connect Chrome 9222") yang print 'OK' SEBELUM koneksi
+      dibuat + say_step("Chrome", "OK") duplikat — log v8.13/v8.14 MENIPU
+      (user lihat 'Connect Chrome 9222.... OK' padahal koneksi gagal sesaat
+      kemudian).
 
 PERBAIKAN v8.14 (dari v8.13):
   - TUJUAN: fix "first item always fail" — root cause ditemukan via pattern analysis.
@@ -281,7 +314,9 @@ import sys
 import time
 import socket
 import re
+import json
 import traceback
+import urllib.request
 from datetime import datetime
 
 from selenium import webdriver
@@ -329,18 +364,84 @@ def say_summary_box(lines):
         say(f" {line}")
 
 # ============================================================
-# CHROME CONNECTION
+# CHROME CONNECTION (v8.15: HONEST — cek DevTools asli, bukan cuma port TCP)
 # ============================================================
-def connect_chrome():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.5)
-        if s.connect_ex(("127.0.0.1", DEBUG_PORT)) != 0:
-            say(f"  \u274c [ERROR] Port debugging {DEBUG_PORT} tidak aktif.")
-            say(f"     \u2192 Buka Chrome: chrome.exe --remote-debugging-port={DEBUG_PORT} --user-data-dir=\"C:\\ChromeDebugProfile\"")
-            sys.exit(1)
+def devtools_version(timeout=2.0):
+    """(ok, info) — True hanya kalau Chrome DevTools BETUL-BETUL menjawab
+    http://127.0.0.1:{DEBUG_PORT}/json/version dengan JSON berisi "Chrome/...".
+    Cek socket TCP saja TIDAK jujur: proses lain bisa duduk di port 9222, atau
+    Chrome zombie (port listen tapi DevTools tidak merespon) — dua-duanya
+    lolos cek socket, lalu chromedriver gagal 'chrome not reachable'."""
+    try:
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{DEBUG_PORT}/json/version", timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8", "replace"))
+        browser = str(data.get("Browser", ""))
+        if "Chrome" in browser:
+            return True, browser
+        return False, f"yang listen port {DEBUG_PORT} bukan Chrome ({browser!r})"
+    except Exception as e:
+        return False, f"{type(e).__name__}"
+
+def connect_chrome(retries=3, delay=5.0):
+    """Connect ke Chrome debug port — JUJUR di setiap langkah:
+    1. Cek /json/version (Chrome asli? hidup?) — RETRY 3x.
+    2. webdriver.Chrome() — RETRY 3x (Chrome bisa mati/relaunch DI TENGAH
+       unduhan chromedriver ±1 menit setelah Chrome update).
+    3. Verify session hidup (baca driver.title — round-trip asli ke Chrome)."""
+    for attempt in range(1, retries + 1):
+        ok, info = devtools_version()
+        if ok:
+            say_step(f"Connect Chrome {DEBUG_PORT} [{info}]", "OK")
+            break
+        say(f"  ⚠ Chrome {DEBUG_PORT} tidak merespon /json/version "
+            f"(coba {attempt}/{retries}): {info}")
+        if attempt < retries:
+            say(f"    retry dalam {delay:.0f}s ...")
+            time.sleep(delay)
+    else:
+        say(f"  ❌ [ERROR] Chrome debugging port {DEBUG_PORT} TIDAK aktif.")
+        say(f"     Yang dicek bukan sekadar port — Chrome harus menjawab:")
+        say(f"       http://127.0.0.1:{DEBUG_PORT}/json/version")
+        say(f"     → Klik 'Buka Chrome 9222' lagi (tombol v5.3 menutup instance")
+        say(f"       lama tanpa port sebelum launch), ATAU jalankan manual:")
+        say(f"       chrome.exe --remote-debugging-port={DEBUG_PORT} --user-data-dir=\"C:\\ChromeDebugProfile\"")
+        say(f"     → Kalau jendela Chrome kebuka tapi JSON tidak muncul: tutup")
+        say(f"       SEMUA Chrome (Task Manager → end task chrome.exe), coba lagi.")
+        sys.exit(1)
+
     opt = Options()
     opt.add_experimental_option("debuggerAddress", f"127.0.0.1:{DEBUG_PORT}")
-    return webdriver.Chrome(options=opt)
+    last_err = None
+    for attempt in range(1, 4):
+        try:
+            driver = webdriver.Chrome(options=opt)
+            _ = driver.title  # verify: session BETUL-BETUL hidup (round-trip asli)
+            say_step(f"Chromedriver session (coba {attempt})", "OK")
+            return driver
+        except Exception as e:
+            last_err = e
+            say(f"  ⚠ webdriver.Chrome() gagal (coba {attempt}/3): {type(e).__name__}")
+            if str(e):
+                say(f"    {str(e).splitlines()[0]}")
+            ok, info = devtools_version()
+            if not ok:
+                say(f"  ❌ Chrome {DEBUG_PORT} MATI saat chromedriver mencoba connect: {info}")
+                say(f"     → Chrome mati/relaunch DI TENGAH proses (unduh chromedriver")
+                say(f"       bisa ±1 menit setelah update Chrome).")
+                say(f"     → JANGAN tutup jendela Chrome debug selama tool berjalan.")
+                say(f"     → Klik 'Buka Chrome 9222' lagi, lalu jalankan ulang tool.")
+                sys.exit(1)
+            time.sleep(3)
+    say(f"  ❌ [ERROR] Gagal create chromedriver session setelah 3x: "
+        f"{type(last_err).__name__}")
+    if str(last_err):
+        say(f"     {str(last_err).splitlines()[0]}")
+    say(f"     → Kemungkinan versi chromedriver ≠ versi Chrome.")
+    say(f"     → Cek versi Chrome di http://127.0.0.1:{DEBUG_PORT}/json/version,")
+    say(f"       update Chrome, lalu jalankan ulang (Selenium Manager akan")
+    say(f"       unduh chromedriver yang cocok secara otomatis).")
+    sys.exit(1)
 
 def switch_top(driver):
     try: driver.switch_to.default_content()
@@ -1756,9 +1857,11 @@ def main():
     kodes = [k for k in kodes if KODE_RE.match(k) or True]  # accept all non-empty
     say(f"  Total   : {len(kodes)} kode")
 
-    say_step("Connect Chrome 9222")
+    # v8.15: connect_chrome() sekarang punya logging jujur sendiri (cek DevTools
+    # asli + verify session). Dua baris v8.13/v8.14 berikut DIHAPUS karena
+    # MENIPU: say_step() default-nya print 'OK' SEBELUM koneksi dibuat, jadi
+    # user lihat 'Connect Chrome 9222.... OK' padahal koneksi gagal setelahnya.
     driver = connect_chrome()
-    say_step("Chrome", "OK")
 
     say_step("Cari frame list")
     fr = find_list_frame(driver, timeout=12)

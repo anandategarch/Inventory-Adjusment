@@ -16,10 +16,19 @@ PORT = 9222
 KODE_DEF = "IT.2026.09.19805"
 
 def conn():
-    s = socket.socket(); s.settimeout(0.5)
-    if s.connect_ex(("127.0.0.1", PORT)) != 0:
-        sys.exit(f"Port {PORT} mati. Buka Chrome: chrome.exe --remote-debugging-port={PORT} --user-data-dir=\"C:\\ChromeDebugProfile\"")
-    s.close()
+    # HONEST check (dulu socket TCP mentah — bisa lolos palsu: proses lain di
+    # 9222 / Chrome zombie → chromedriver gagal 'chrome not reachable'):
+    # DevTools harus menjawab /json/version dengan JSON berisi "Chrome/...".
+    import urllib.request, json
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/json/version", timeout=2.0) as r:
+            data = json.loads(r.read().decode("utf-8", "replace"))
+        browser = str(data.get("Browser", ""))
+    except Exception as e:
+        sys.exit(f"Chrome DevTools {PORT} tidak merespon /json/version ({type(e).__name__}).\n"
+                 f"Buka Chrome: chrome.exe --remote-debugging-port={PORT} --user-data-dir=\"C:\\ChromeDebugProfile\"")
+    if "Chrome" not in browser:
+        sys.exit(f"Port {PORT} dipegang proses bukan Chrome: {browser!r}")
     o = Options(); o.add_experimental_option("debuggerAddress", f"127.0.0.1:{PORT}")
     return webdriver.Chrome(options=o)
 

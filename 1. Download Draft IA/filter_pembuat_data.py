@@ -1,15 +1,26 @@
 """
-filter_pembuat_data.py  (v9.1 - FAST EDITION)
+filter_pembuat_data.py  (v9.2 - FAST EDITION)
 Verifikasi via chip nilai individual di panel (anti chip-terpotong).
 Delay dipercepat tapi tetap acak; wait popup saran (1.2s) TIDAK dipangkas.
+v9.2: HONEST Chrome check + launch ROBUST — fix 'cannot connect to chrome at
+  127.0.0.1:9222 / chrome not reachable' yang tetap muncul meski Chrome dibuka:
+  - cek DevTools ASLI /json/version (bukan socket TCP mentah — port kebuka ≠
+    Chrome hidup: proses lain di 9222 / Chrome zombie lolos cek palsu).
+  - auto-launch: tutup dulu instance Chrome debug lama TANPA port (launch baru
+    hanya diteruskan ke instance lama lalu exit → port tidak pernah aktif),
+    profil debug UNIFIED C:\\ChromeDebugProfile (dulu %TEMP%\\ChromeDebug_Accurate
+    — berebut port 9222 dengan tab SJ GIS), poll sampai Chrome menjawab.
+  - chromedriver connect dibungkus retry 3x + pesan error jujur.
 """
 import time
+import json
 import socket
 import subprocess
 import os
 import sys
 import re
 import random
+import urllib.request
 from datetime import datetime
 
 from selenium import webdriver
@@ -302,14 +313,53 @@ return (function(code){
 """
 
 # ============================================================
-# UTILITAS CHROME
+# UTILITAS CHROME (v9.2: HONEST check + ROBUST launch)
 # ============================================================
+CHROME_DEBUG_PROFILE = r"C:\ChromeDebugProfile"
+
+def devtools_version(port=DEBUG_PORT, timeout=2.0):
+    """(ok, info) — True hanya kalau Chrome DevTools BETUL-BETUL menjawab
+    /json/version. Cek socket TCP mentah bisa lolos palsu (proses lain di
+    9222 / Chrome zombie) → chromedriver gagal 'chrome not reachable'."""
+    try:
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/json/version", timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8", "replace"))
+        browser = str(data.get("Browser", ""))
+        if "Chrome" in browser:
+            return True, browser
+        return False, f"yang listen port {port} bukan Chrome ({browser!r})"
+    except Exception as e:
+        return False, f"{type(e).__name__}"
+
 def is_port_open(port):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.5)
-        return s.connect_ex(("127.0.0.1", port)) == 0
+    """HONEST (v9.2): cek DevTools /json/version, bukan cuma socket TCP."""
+    ok, _ = devtools_version(port)
+    return ok
+
+def kill_stale_debug_chrome():
+    """Tutup HANYA chrome.exe dengan profil debug tool (Chrome PRIBADI tidak
+    disentuh). Wajib sebelum launch: instance lama dengan profil yang SAMA
+    tapi TANPA port 9222 bikin launch baru hanya diteruskan ke instance lama
+    lalu exit → port tidak pernah aktif (root cause 'chrome not reachable')."""
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process -Filter 'Name=''chrome.exe''' | "
+             "Where-Object { $_.CommandLine -like '*ChromeDebugProfile*' -or "
+             "$_.CommandLine -like '*ChromeDebug_Accurate*' } | "
+             "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"],
+            capture_output=True, timeout=15)
+        time.sleep(1)
+    except Exception:
+        pass
 
 def launch_chrome_silent():
+    """Launch Chrome debug — ROBUST (v9.2): return True hanya kalau DevTools
+    menjawab /json/version."""
+    if is_port_open(DEBUG_PORT):
+        return True  # sudah hidup — jangan relaunch (session login aman)
+    kill_stale_debug_chrome()
     candidates = [
         os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
         os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
@@ -318,29 +368,57 @@ def launch_chrome_silent():
     chrome = next((p for p in candidates if os.path.exists(p)), None)
     if not chrome:
         return False
-    user_data = os.path.expandvars(r"%TEMP%\ChromeDebug_Accurate")
     try:
         subprocess.Popen(
             [chrome, f"--remote-debugging-port={DEBUG_PORT}",
-             f"--user-data-dir={user_data}", "https://accurate.id"],
+             f"--user-data-dir={CHROME_DEBUG_PROFILE}",
+             "--no-first-run", "--no-default-browser-check",
+             "--hide-crash-restore-bubble",
+             "https://accurate.id"],
             creationflags=0x08000000
         )
-        return True
     except Exception:
         return False
+    for _ in range(20):
+        time.sleep(1)
+        if is_port_open(DEBUG_PORT):
+            return True
+    return False
 
 def connect_chrome():
-    if not is_port_open(DEBUG_PORT):
+    # v9.2: cek DevTools ASLI (bukan cuma socket) + auto-launch robust + retry.
+    ok, info = devtools_version()
+    if not ok:
+        say("  Chrome  : belum aktif — mencoba meluncurkan Chrome debug...")
         launch_chrome_silent()
-        for _ in range(15):
-            time.sleep(1)
-            if is_port_open(DEBUG_PORT):
-                break
-        if not is_port_open(DEBUG_PORT):
-            raise RuntimeError("Chrome debugging tidak aktif.")
+        ok, info = devtools_version()
+    if not ok:
+        raise RuntimeError(
+            f"Chrome debugging {DEBUG_PORT} tidak merespon /json/version ({info}). "
+            "Klik 'Buka Chrome 9222' di tab Download SJ GIS (tombol menutup "
+            "instance lama tanpa port dulu), login ke Accurate, lalu jalankan "
+            "ulang. Cek manual: buka http://127.0.0.1:9222/json/version — "
+            "harus tampil JSON berisi \"Chrome/...\".")
+    say(f"  Chrome  : terhubung ({info})")
     opt = Options()
     opt.add_experimental_option("debuggerAddress", f"127.0.0.1:{DEBUG_PORT}")
-    return webdriver.Chrome(options=opt)
+    last = None
+    for attempt in range(1, 4):
+        try:
+            return webdriver.Chrome(options=opt)
+        except Exception as e:
+            last = e
+            say(f"  ⚠ chromedriver gagal (coba {attempt}/3): {type(e).__name__}")
+            ok2, info2 = devtools_version()
+            if not ok2:
+                raise RuntimeError(
+                    f"Chrome {DEBUG_PORT} MATI saat chromedriver connect ({info2}). "
+                    "Jangan tutup Chrome debug selama tool berjalan — buka ulang "
+                    "('Buka Chrome 9222'), lalu jalankan lagi.")
+            time.sleep(3)
+    first = str(last).splitlines()[0] if str(last) else str(last)
+    raise RuntimeError(
+        f"Gagal create chromedriver session 3x: {type(last).__name__} — {first}")
 
 def find_and_switch_iframe(driver, selector, timeout=10):
     start = time.time()
@@ -658,7 +736,7 @@ def main():
         pause_if_standalone()
         return 1
 
-    say("  Chrome  : terhubung (port 9222)")
+    say("  Chrome  : session siap")
     human()
 
     say_step("Cari tab list")
