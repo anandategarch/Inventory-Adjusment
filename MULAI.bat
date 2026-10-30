@@ -17,8 +17,9 @@ echo    5. Screen Shot Power BI
 echo.
 echo  Pastikan SETUP.bat sudah dijalankan minimal sekali.
 echo.
-echo  Tekan ENTER untuk membuka UI...
-pause >nul
+echo  Memuat UI... (pertama kali / setelah update bisa beberapa detik)
+echo  Jangan tutup jendela ini selama aplikasi dipakai.
+echo.
 
 cd /d "%~dp02. Import IA"
 python ui_app.py

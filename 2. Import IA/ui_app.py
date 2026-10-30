@@ -1,6 +1,26 @@
 """
-ui_app.py — tampilan aplikasi Import IA (v5.3, pasangan accurate_bot.py v4.9).
+ui_app.py — tampilan aplikasi Import IA (v5.4, pasangan accurate_bot.py v4.10).
 Tab: Otomasi | Database COA & Keterangan | Download Draft IA | Download SJ GIS | Screen Shot Power BI.
+
+v5.4: FIX "MULAI.bat lama banget / UI tak muncul-muncul":
+  1. [BUG KRITIS v5.3] REQUIRED_BOT_VERSION masih "4.8" padahal accurate_bot
+     sudah v4.9+ → check versi GAGAL → dialog error + SystemExit → UI TIDAK
+     PERNAH muncul. Sekarang "4.10" (dan accurate_bot v4.10).
+  2. FAST STARTUP — selenium tidak lagi di-import saat startup:
+       - ui_app.py: `from selenium import webdriver` / `Options` dihapus dari
+         level atas; di-import LOKAL di _run_worker (satu-satunya pemakai).
+       - accurate_bot.py v4.10: import selenium jadi LAZY (proxy _LazySelenium)
+         → import accurate_bot < 0.5s.
+     Import selenium itu BERAT (2-10 detik cold start Windows — ribuan file
+     .py discan Windows Defender, apalagi setelah git pull/update). Dulu UI
+     baru muncul setelah selenium selesai di-import.
+  3. _load_db() ditunda via after() — baca database Excel (openpyxl) bisa
+     makan 1-2s; jangan blok first paint. Window ter-paint dulu, DB menyusul.
+  4. _sj_check_chrome() startup ditunda via after(300) — cek jaringan (2s
+     timeout kalau ada zombie di port 9222) tidak lagi blok pembangunan UI.
+  5. MULAI.bat: gerbang `pause >nul` DIHAPUS — dulu wajib tekan ENTER dulu
+     (klik mouse tidak ngaruh!) → terasa 'UI tak muncul-muncul'. Sekarang
+     klik MULAI.bat = langsung load UI.
 
 v5.3: FIX "cannot connect to chrome at 127.0.0.1:9222 / chrome not reachable"
   yang TETAP muncul meski tombol 'Buka Chrome 9222' diklik — SEMUA cek Chrome
@@ -159,15 +179,17 @@ from datetime import datetime, date
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
+# v5.4: import selenium DIHAPUS dari level atas (dulu di sini:
+# `from selenium import webdriver` + `Options`) — selenium itu BERAT
+# (2-10 detik cold start Windows) dan cuma dipakai _run_worker.
+# Sekarang di-import lokal di _run_worker → UI muncul cepat.
 
 # v4.15: merged main.py — ui_app.py sekarang entry point langsung.
 # import accurate_bot + version check di-wrap try/except (preserve nice error dialog
 # dari main.py lama). Kalau import/version gagal -> messagebox dialog (bukan traceback).
 try:
     import accurate_bot as bot
-    REQUIRED_BOT_VERSION = "4.8"
+    REQUIRED_BOT_VERSION = "4.10"
     if getattr(bot, "BOT_VERSION", None) != REQUIRED_BOT_VERSION:
         raise RuntimeError(
             "Versi file TIDAK SEPASANG.\n\n"
@@ -531,7 +553,13 @@ class AutoImportApp(tk.Tk):
         self._setup_style()
         self._build_ui()
         self._apply_settings()
-        self._load_db(silent=True)
+        # v5.4: _load_db (baca database Excel via openpyxl, bisa 1-2s)
+        # DITUNDA sampai window ter-paint — jangan blok first paint.
+        # Defensive defaults supaya handler yang jalan sebelum DB termuat
+        # tidak crash.
+        self.db_map = {}
+        self.db_meta = {"files": [], "total_rows": 0}
+        self.after(150, lambda: self._load_db(silent=True))
         self._detect_dl_folder()
         self.after(100, self._drain_queue)
         self.after(500, self._refresh_summary_loop)
@@ -954,7 +982,9 @@ class AutoImportApp(tk.Tk):
 
         # ---- Inisialisasi indikator SJ (auto-detect script + cek chrome + load kodes) ----
         self._sj_detect_script()
-        self._sj_check_chrome()
+        # v5.4: cek Chrome DITUNDA via after(300) — ini cek jaringan (urllib,
+        # timeout 2s kalau ada zombie di 9222); jangan blok pembangunan UI.
+        self.after(300, self._sj_check_chrome)
         self._load_sj_settings()
 
         # ================= TAB SCREEN SHOT POWER BI (v4.14) =================
@@ -2589,6 +2619,12 @@ class AutoImportApp(tk.Tk):
             self.log("Permintaan berhenti dikirim.", "WARN")
 
     def _run_worker(self):
+        # v5.4: selenium di-import LOKAL di sini (bukan di level atas file) —
+        # import selenium itu BERAT (2-10 detik cold start Windows); UI harus
+        # muncul cepat saat MULAI.bat dijalankan. Ini satu-satunya pemakai
+        # webdriver/Options di ui_app.py.
+        from selenium import webdriver
+        from selenium.webdriver.chrome.options import Options
         driver = None
         success_count, fail_count, skipped_count, global_idx = 0, 0, 0, 0
         fail_list = []
@@ -2680,6 +2716,6 @@ class AutoImportApp(tk.Tk):
 
 
 if __name__ == "__main__":
-    print(f"=== {APP_TITLE} — ui_app.py v5.2 (pasangan accurate_bot.py v4.7) ===")
+    print(f"=== {APP_TITLE} — ui_app.py v5.4 (pasangan accurate_bot.py v4.10) ===")
     app = AutoImportApp()
     app.mainloop()

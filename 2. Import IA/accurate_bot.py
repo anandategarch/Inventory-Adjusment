@@ -1,10 +1,19 @@
 """
-accurate_bot.py — logika otomasi Accurate Online (v4.9, pasangan ui_app.py v5.3).
+accurate_bot.py — logika otomasi Accurate Online (v4.10, pasangan ui_app.py v5.4).
 Flow terbukti: isi tanggal -> info -> upload -> konfirmasi -> simpan.
 Verifikasi ketat: tanggal, akun (harus sama target), cabang (reset + sama target).
 Pop-up: panduan upload diabaikan; hasil/error/stok diproses; LANJUTKAN otomatis.
 v4.7: database COA & Keterangan dibaca otomatis dari folder aplikasi.
 v4.8: branchSet verify pakai contains match (Accurate branch list ada kode prefix).
+v4.10: FAST STARTUP — import selenium sekarang LAZY (proxy _LazySelenium).
+  Fix "MULAI.bat lama banget / UI tak muncul-muncul": selenium di-import di
+  level atas file ini → ui_app.py (yang meng-import accurate_bot saat start)
+  ikut lambat — import selenium itu BERAT (2-10 detik cold start di Windows:
+  ribuan file .py discan Windows Defender, apalagi baru setelah git pull).
+  Sekarang: import accurate_bot < 0.5 detik → jendela UI langsung muncul;
+  selenium baru di-load saat fungsi otomasi pertama kali dipakai (klik Mulai).
+  Semua pemakaian lama (By.CSS_SELECTOR, WebDriverWait(driver, 10),
+  EC.presence_of_element_located) tetap bekerja TANPA perubahan.
 v4.9: HONEST Chrome check + launch ROBUST — fix 'cannot connect to chrome at
   127.0.0.1:9222 / chrome not reachable' yang tetap muncul meski Chrome dibuka:
   - is_port_open() sekarang cek DevTools ASLI /json/version (socket TCP mentah
@@ -23,17 +32,57 @@ v4.9: HONEST Chrome check + launch ROBUST — fix 'cannot connect to chrome at
 import os
 import re
 import json
-import socket
 import subprocess
 import time
 import random
 import urllib.request
 
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
-BOT_VERSION = "4.9"
+class _LazySelenium:
+    """Proxy import selenium SENGERJA — saat DIPAKAI, bukan saat module load.
+
+    Import selenium itu BERAT: di Windows cold start bisa 2-10 detik (ribuan
+    file .py di-scan Windows Defender, apalagi setelah git pull / update).
+    v4.9 dan sebelumnya: accurate_bot import selenium di level atas →
+    ui_app.py (yang meng-import accurate_bot saat startup) ikut lambat →
+    jendela UI lama muncul / terasa 'tak muncul-muncul' setelah MULAI.bat.
+
+    Dengan proxy ini:
+      - import accurate_bot jadi cepat (<0.5s) → UI langsung muncul.
+      - selenium baru di-load saat fungsi otomasi pertama kali dipanggil.
+    Semua pemakaian lama (By.CSS_SELECTOR, WebDriverWait(driver, 10),
+    EC.presence_of_element_located) tetap bekerja TANPA perubahan — proxy
+    meneruskan attribute access & pemanggilan ke object selenium asli.
+    """
+    __slots__ = ("_mod", "_attr", "_real")
+
+    def __init__(self, module_path, attr_name):
+        self._mod = module_path
+        self._attr = attr_name
+        self._real = None
+
+    def _resolve(self):
+        if self._real is None:
+            import importlib
+            self._real = getattr(
+                importlib.import_module(self._mod), self._attr)
+        return self._real
+
+    def __getattr__(self, name):
+        return getattr(self._resolve(), name)
+
+    def __call__(self, *args, **kwargs):
+        return self._resolve()(*args, **kwargs)
+
+
+# Selenium LAZY (v4.10) — lihat docstring _LazySelenium di atas.
+# By/WebDriverWait/EC dipakai di banyak fungsi di file ini; proxy membuat
+# semuanya tetap kompatibel tanpa mengubah satu pun baris pemakaian.
+By = _LazySelenium("selenium.webdriver.common.by", "By")
+WebDriverWait = _LazySelenium("selenium.webdriver.support.ui", "WebDriverWait")
+EC = _LazySelenium("selenium.webdriver.support", "expected_conditions")
+
+BOT_VERSION = "4.10"
 DEBUG_PORT = 9222
 
 MODE_APPROVE = "APPROVE"
