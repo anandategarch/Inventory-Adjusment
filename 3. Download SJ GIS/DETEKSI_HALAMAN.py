@@ -1,6 +1,7 @@
 """DETEKSI_HALAMAN.py - Trial diagnostic untuk Download SJ GIS (Pemindahan Barang, Accurate).
 Cara pakai:
   1. Buka Chrome: chrome.exe --remote-debugging-port=9222 --user-data-dir="C:\\ChromeDebugProfile" "https://accurate.id"
+     (kalau 9222 dipakai proses lain, pakai 9223 dst. — script auto-detect 9222-9225)
   2. Login Accurate, buka halaman LIST Pemindahan Barang.
   3. python DETEKSI_HALAMAN.py  (atau double-click JALANKAN_DETEKSI.bat)
   4. Masukkan kode (default IT.2026.09.19805), Enter, tunggu selesai.
@@ -12,7 +13,31 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.options import Options
 
-PORT = int(__import__("os").environ.get("IA_DEBUG_PORT", "9222"))  # v2: port dari UI (auto port-switch)
+PORT_CANDIDATES = (9222, 9223, 9224, 9225)
+
+def _resolve_port():
+    # v2.1: env dari UI v5.5 (port AKTUAL — bisa 9223 dst. kalau 9222 dipegang
+    # proses lain); tanpa UI → auto-detect standalone (scan 9222-9225).
+    import os, json, urllib.request
+    env = os.environ.get("IA_DEBUG_PORT", "").strip()
+    if env:
+        try:
+            return int(env)
+        except ValueError:
+            pass
+    for p in PORT_CANDIDATES:
+        try:
+            with urllib.request.urlopen(
+                    f"http://127.0.0.1:{p}/json/version", timeout=1.0) as r:
+                data = json.loads(r.read().decode("utf-8", "replace"))
+            if "Chrome" in str(data.get("Browser", "")):
+                print(f"[INFO] Chrome debug terdeteksi di port {p} (auto-detect standalone).")
+                return p
+        except Exception:
+            continue
+    return PORT_CANDIDATES[0]
+
+PORT = _resolve_port()  # v2.1: env UI v5.5 / auto-detect standalone
 KODE_DEF = "IT.2026.09.19805"
 
 def conn():
@@ -108,7 +133,7 @@ def reframe(d, fr):
 def main():
     kode = input(f"Kode SJ (default {KODE_DEF}): ").strip() or KODE_DEF
     print("Kode:", kode)
-    print("\n[1/5] connect Chrome 9222...")
+    print(f"\n[1/5] connect Chrome {PORT}...")
     d = conn(); print("OK", d.current_url)
     try:
         d.execute_script("window.__e=[];['error'].forEach(function(t){var o=console[t];"

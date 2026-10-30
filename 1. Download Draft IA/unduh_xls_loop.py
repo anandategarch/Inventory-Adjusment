@@ -1,9 +1,13 @@
 """
-unduh_xls_loop.py  (v7.2 - FULL SPEED)
+unduh_xls_loop.py  (v7.3 - FULL SPEED)
 - TANPA delay tiruan-manusia; hanya wait fungsional (event-driven) + margin render tipis.
 - Suffix Keterangan dari kolom grid saat scroll (fallback textarea detail).
 - Cetak: Ctrl+P dulu, tombol Cetak fallback, retry Escape+Ctrl+P.
 - Circuit breaker + katalog error + rekap akhir.
+v7.3: STANDALONE AUTO-DETECT PORT — kalau dijalankan LANGSUNG (python, tanpa
+  UI), env IA_DEBUG_PORT tidak ada → dulu tetap nyasar di 9222 padahal Chrome
+  hidup di 9223 (UI v5.5 auto-switch kalau 9222 dipegang proses lain).
+  Sekarang: scan port 9222-9225, pakai port pertama yang dijawab Chrome.
 v7.2: MULTI-PORT — DEBUG_PORT dari env IA_DEBUG_PORT (default 9222).
   UI v5.5 set env ini (auto-switch kalau 9222 dipakai proses lain).
 v7.1: HONEST Chrome check — fix 'cannot connect to chrome at 127.0.0.1:9222 /
@@ -30,7 +34,30 @@ from selenium.common.exceptions import (
     WebDriverException, StaleElementReferenceException, ElementClickInterceptedException,
 )
 
-DEBUG_PORT = int(os.environ.get("IA_DEBUG_PORT", "9222"))  # v7.2: port dari UI (auto port-switch)
+# v7.3: port debug = env dari UI v5.5 (port AKTUAL — 9223/9224/9225 kalau 9222
+# dipegang proses lain) / auto-detect standalone / default 9222.
+DEBUG_PORT_CANDIDATES = (9222, 9223, 9224, 9225)
+
+def _resolve_debug_port():
+    env = os.environ.get("IA_DEBUG_PORT", "").strip()
+    if env:
+        try:
+            return int(env)  # disuntik UI v5.5 — port aktual (auto port-switch)
+        except ValueError:
+            pass
+    for p in DEBUG_PORT_CANDIDATES:
+        try:
+            with urllib.request.urlopen(
+                    f"http://127.0.0.1:{p}/json/version", timeout=1.0) as r:
+                data = json.loads(r.read().decode("utf-8", "replace"))
+            if "Chrome" in str(data.get("Browser", "")):
+                print(f"[INFO] Chrome debug terdeteksi di port {p} (auto-detect standalone).")
+                return p
+        except Exception:
+            continue
+    return DEBUG_PORT_CANDIDATES[0]
+
+DEBUG_PORT = _resolve_debug_port()
 MAX_ROWS = 0
 MAX_CONSECUTIVE_FAIL = 3
 DELAY_BETWEEN_TRANSACTIONS = 1.5  # seconds — prevent Accurate rate-limit after 4+ rapid prints
@@ -42,8 +69,8 @@ NOMOR_RE = re.compile(r"(?:IA\.\d{4}\.\d{2}\.\d+|DFT\.\d+)")
 
 ERROR_CATALOG = {
     "E_LIST": ("Grid list tidak ditemukan.", "Pastikan tab Penyesuaian Persediaan terbuka & login aktif."),
-    "E_CHROME": ("Chrome debugging 9222 tidak merespon /json/version.",
-                 "Klik 'Buka Chrome 9222' di tab Download SJ GIS (tombol menutup instance lama tanpa port dulu), login, lalu jalankan ulang. Cek manual: buka http://127.0.0.1:9222/json/version — harus tampil JSON berisi 'Chrome/...'."),
+    "E_CHROME": (f"Chrome debugging {DEBUG_PORT} tidak merespon /json/version.",
+                 f"Klik 'Buka Chrome Debug' di tab Download SJ GIS (tombol menutup instance lama tanpa port dulu), login, lalu jalankan ulang. Cek manual: buka http://127.0.0.1:{DEBUG_PORT}/json/version — harus tampil JSON berisi 'Chrome/...'."),
     "E_ROW": ("Baris transaksi tidak ditemukan / tidak bisa diklik.", "Grid mungkin belum selesai render. Coba jalankan ulang."),
     "E_DETAIL": ("Tab detail transaksi tidak terbuka.", "Klik manual baris sekali untuk memastikan halaman responsif."),
     "E_PRINT": ("Overlay report tidak muncul.", "Pastikan fokus di halaman detail; coba ulang siklus."),
@@ -1308,7 +1335,7 @@ def main():
     except Exception as e:
         say(f"  \u274c Error: {type(e).__name__}: {e}")
         return 1
-    say("  Chrome   : terhubung (port 9222)")
+    say(f"  Chrome   : terhubung (port {DEBUG_PORT})")
 
     recover_to_list(driver)
 

@@ -1,7 +1,11 @@
 """
-filter_pembuat_data.py  (v9.3 - FAST EDITION)
+filter_pembuat_data.py  (v9.4 - FAST EDITION)
 Verifikasi via chip nilai individual di panel (anti chip-terpotong).
 Delay dipercepat tapi tetap acak; wait popup saran (1.2s) TIDAK dipangkas.
+v9.4: STANDALONE AUTO-DETECT PORT — kalau dijalankan LANGSUNG (python, tanpa
+  UI), env IA_DEBUG_PORT tidak ada → dulu tetap nyasar di 9222 padahal Chrome
+  hidup di 9223 (UI v5.5 auto-switch kalau 9222 dipegang proses lain).
+  Sekarang: scan port 9222-9225, pakai port pertama yang dijawab Chrome.
 v9.3: MULTI-PORT — DEBUG_PORT dari env IA_DEBUG_PORT (default 9222).
   UI v5.5 set env ini (auto-switch kalau 9222 dipakai proses lain).
 v9.2: HONEST Chrome check + launch ROBUST — fix 'cannot connect to chrome at
@@ -36,7 +40,30 @@ from selenium.common.exceptions import (
     ElementClickInterceptedException,
 )
 
-DEBUG_PORT = int(os.environ.get("IA_DEBUG_PORT", "9222"))  # v9.3: port dari UI (auto port-switch)
+# v9.4: port debug = env dari UI v5.5 (port AKTUAL — 9223/9224/9225 kalau 9222
+# dipegang proses lain) / auto-detect standalone / default 9222.
+DEBUG_PORT_CANDIDATES = (9222, 9223, 9224, 9225)
+
+def _resolve_debug_port():
+    env = os.environ.get("IA_DEBUG_PORT", "").strip()
+    if env:
+        try:
+            return int(env)  # disuntik UI v5.5 — port aktual (auto port-switch)
+        except ValueError:
+            pass
+    for p in DEBUG_PORT_CANDIDATES:
+        try:
+            with urllib.request.urlopen(
+                    f"http://127.0.0.1:{p}/json/version", timeout=1.0) as r:
+                data = json.loads(r.read().decode("utf-8", "replace"))
+            if "Chrome" in str(data.get("Browser", "")):
+                print(f"[INFO] Chrome debug terdeteksi di port {p} (auto-detect standalone).")
+                return p
+        except Exception:
+            continue
+    return DEBUG_PORT_CANDIDATES[0]
+
+DEBUG_PORT = _resolve_debug_port()
 DEFAULT_BRANCHES = "RESTO.PWKTAM, RESTO.KWGGAL"
 
 LIST_DETECTOR = 'input[placeholder*="Ketik dan"], .slick-grid, [class*="slick-grid"]'
@@ -397,10 +424,10 @@ def connect_chrome():
     if not ok:
         raise RuntimeError(
             f"Chrome debugging {DEBUG_PORT} tidak merespon /json/version ({info}). "
-            "Klik 'Buka Chrome 9222' di tab Download SJ GIS (tombol menutup "
-            "instance lama tanpa port dulu), login ke Accurate, lalu jalankan "
-            "ulang. Cek manual: buka http://127.0.0.1:9222/json/version — "
-            "harus tampil JSON berisi \"Chrome/...\".")
+            f"Klik 'Buka Chrome Debug' di tab Download SJ GIS (tombol menutup "
+            f"instance lama tanpa port dulu), login ke Accurate, lalu jalankan "
+            f"ulang. Cek manual: buka http://127.0.0.1:{DEBUG_PORT}/json/version — "
+            f"harus tampil JSON berisi \"Chrome/...\".")
     say(f"  Chrome  : terhubung ({info})")
     opt = Options()
     opt.add_experimental_option("debuggerAddress", f"127.0.0.1:{DEBUG_PORT}")
@@ -415,8 +442,8 @@ def connect_chrome():
             if not ok2:
                 raise RuntimeError(
                     f"Chrome {DEBUG_PORT} MATI saat chromedriver connect ({info2}). "
-                    "Jangan tutup Chrome debug selama tool berjalan — buka ulang "
-                    "('Buka Chrome 9222'), lalu jalankan lagi.")
+                    f"Jangan tutup Chrome debug selama tool berjalan — buka ulang "
+                    f"('Buka Chrome Debug'), lalu jalankan lagi.")
             time.sleep(3)
     first = str(last).splitlines()[0] if str(last) else str(last)
     raise RuntimeError(

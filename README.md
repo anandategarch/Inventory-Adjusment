@@ -53,7 +53,7 @@ Inventory-Adjusment/
 ### 1. Download Draft IA
 Download file Excel draf Penyesuaian Persediaan per transaksi dari Accurate Online, dengan filter "Pembuat Data". Pakai Selenium + Chrome Remote Debugging.
 - **Via UI:** Tab "Download Draft IA" → setup cabang → Mulai
-- **Standalone (optional):** `python unduh_xls_loop.py` (perlu Chrome debugging port 9222)
+- **Standalone (optional):** `python unduh_xls_loop.py` (perlu Chrome debugging — port auto-detect 9222-9225)
 
 ### 2. Import IA
 Import Inventory Adjustment ke Accurate Online. UI Tkinter + Selenium, dengan mapping COA & Keterangan dari database Excel.
@@ -99,8 +99,15 @@ chrome.exe --remote-debugging-port=9222 --user-data-dir="C:\ChromeDebugProfile" 
 ```
 Login Accurate sekali di Chrome tersebut (session persist di `C:\ChromeDebugProfile`). Setelah itu, tool auto-attach ke Chrome yang sudah login.
 
-**Tip:** Tab "Download SJ GIS" di UI punya tombol "Buka Chrome 9222" yang
-launch Chrome otomatis dengan anti-throttle flags.
+**Port 9222 dipakai proses lain?** (UI menampilkan "Chrome 9222: ✗" padahal jendela
+Chrome kebuka) — UI v5.5 otomatis meluncurkan Chrome debug di port bebas
+berikutnya (9223/9224/9225), dan SEMUA tool mengikuti port itu: Import IA
+(bot.DEBUG_PORT), Download Draft IA + Download SJ GIS (env IA_DEBUG_PORT).
+Port tersimpan di `ui_settings.json` dan ditampilkan di label Chrome.
+Script standalone juga auto-detect (scan 9222-9225).
+
+**Tip:** Tab "Download SJ GIS" di UI punya tombol "Buka Chrome Debug" yang
+launch Chrome otomatis dengan anti-throttle flags + pemilihan port bebas.
 
 ## Cara Download & Update
 
@@ -111,6 +118,8 @@ launch Chrome otomatis dengan anti-throttle flags.
 
 ## Changelog
 
+- **v9.4 / v7.3 / v8.17 / DETEKSI v2.1** (filter_pembuat_data / unduh_xls_loop / download_sj_gis / DETEKSI_HALAMAN): standalone AUTO-DETECT PORT 9222-9225 — Chrome yang hidup di 9223 tetap ketemu walau script dijalankan tanpa UI. Hint error kini menampilkan port aktual + nama tombol baru ('Buka Chrome Debug').
+- **v5.5** (ui_app.py): deep diagnosis port (netstat+tasklist di log — menjawab "ada apa di 9222") + AUTO PORT-SWITCH: kalau 9222 dipegang proses lain, Chrome debug diluncurkan di 9223/9224/9225. Port disinkronkan ke semua tab & subprocess (Import IA, Draft IA, SJ GIS) + persist di `ui_settings.json`.
 - **v5.1** (ui_app.py): Chrome anti-throttle flags di `_sj_launch_chrome` (`--disable-background-timer-throttling`, `--disable-backgrounding-occluded-windows`, `--disable-renderer-backgrounding`). Chrome aman di-background selama tool berjalan. README update "stay on Chrome" guidance.
 - **v7** (unduh_xls_loop.py): `HARD_RESET_EVERY_N` 8→4 (E_ROW bisa terjadi di #5/#7 sebelum reset #8). Failure-triggered hard reset — setiap transaksi gagal (E_ROW, E_PRINT, dll) di-reset grid sebelum lanjut ke transaksi berikutnya.
 - **v4.14** (ui_app.py): 5 tab unified UI (Otomasi + Database + Download Draft IA + Download SJ GIS + Screen Shot Power BI)

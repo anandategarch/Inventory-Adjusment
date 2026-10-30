@@ -1,7 +1,16 @@
 """
-download_sj_gis.py  (v8.16)
+download_sj_gis.py  (v8.17)
 =========================
 Download Surat Jalan (SJ) dari modul PEMINDAHAN BARANG Accurate Online (database GiS).
+
+PERBAIKAN v8.17 (dari v8.16):
+  - STANDALONE AUTO-DETECT PORT: kalau script dijalankan LANGSUNG (python /
+    double-click .bat, tanpa UI), env IA_DEBUG_PORT tidak ada → dulu tetap
+    nyasar di 9222 padahal Chrome hidup di 9223 (UI v5.5 auto-switch kalau
+    9222 dipegang proses lain). Sekarang: scan port 9222-9225 dan pakai port
+    pertama yang dijawab Chrome DevTools (/json/version).
+  - Hint error: nama tombol disesuaikan ('Buka Chrome Debug' — UI v5.5 tidak
+    lagi mengunci port 9222 di nama tombol).
 
 PERBAIKAN v8.16 (dari v8.15):
   - MULTI-PORT: DEBUG_PORT sekarang dibaca dari env IA_DEBUG_PORT (default
@@ -304,6 +313,7 @@ Flow (berdasarkan RECORDER recording user manual — selector PERSIS):
 
 Cara pakai:
   1. Buka Chrome: chrome.exe --remote-debugging-port=9222 --user-data-dir="C:\\ChromeDebugProfile" "https://accurate.id"
+     (kalau 9222 dipakai proses lain, pakai 9223 dst. — script auto-detect 9222-9225)
   2. Login Accurate, buka modul PEMINDAHAN BARANG (halaman LIST/tabel).
   3. python download_sj_gis.py  (atau double-click JALANKAN_SJ_GIS.bat)
   4. Masukkan kode SJ. Bisa 1 kode, atau multi-kode dipisah koma:
@@ -338,7 +348,30 @@ from selenium.common.exceptions import (
 # ============================================================
 # CONFIG
 # ============================================================
-DEBUG_PORT = int(os.environ.get("IA_DEBUG_PORT", "9222"))  # v8.16: port dari UI (auto port-switch)
+# v8.17: port debug = env dari UI v5.5 (port AKTUAL — 9223/9224/9225 kalau 9222
+# dipegang proses lain) / auto-detect standalone / default 9222.
+DEBUG_PORT_CANDIDATES = (9222, 9223, 9224, 9225)
+
+def _resolve_debug_port():
+    env = os.environ.get("IA_DEBUG_PORT", "").strip()
+    if env:
+        try:
+            return int(env)  # disuntik UI v5.5 — port aktual (auto port-switch)
+        except ValueError:
+            pass
+    for p in DEBUG_PORT_CANDIDATES:
+        try:
+            with urllib.request.urlopen(
+                    f"http://127.0.0.1:{p}/json/version", timeout=1.0) as r:
+                data = json.loads(r.read().decode("utf-8", "replace"))
+            if "Chrome" in str(data.get("Browser", "")):
+                print(f"[INFO] Chrome debug terdeteksi di port {p} (auto-detect standalone).")
+                return p
+        except Exception:
+            continue
+    return DEBUG_PORT_CANDIDATES[0]
+
+DEBUG_PORT = _resolve_debug_port()
 DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads")
 KODE_RE = re.compile(r"IT\.\d{4}\.\d{2}\.\d+")
 DL_EXTS = (".pdf", ".xls", ".xlsx", ".doc", ".docx", ".png", ".jpg", ".jpeg")
@@ -410,7 +443,7 @@ def connect_chrome(retries=3, delay=5.0):
         say(f"  ❌ [ERROR] Chrome debugging port {DEBUG_PORT} TIDAK aktif.")
         say(f"     Yang dicek bukan sekadar port — Chrome harus menjawab:")
         say(f"       http://127.0.0.1:{DEBUG_PORT}/json/version")
-        say(f"     → Klik 'Buka Chrome 9222' lagi (tombol v5.3 menutup instance")
+        say(f"     → Klik 'Buka Chrome Debug' lagi (tombol UI menutup instance")
         say(f"       lama tanpa port sebelum launch), ATAU jalankan manual:")
         say(f"       chrome.exe --remote-debugging-port={DEBUG_PORT} --user-data-dir=\"C:\\ChromeDebugProfile\"")
         say(f"     → Kalau jendela Chrome kebuka tapi JSON tidak muncul: tutup")
@@ -437,7 +470,7 @@ def connect_chrome(retries=3, delay=5.0):
                 say(f"     → Chrome mati/relaunch DI TENGAH proses (unduh chromedriver")
                 say(f"       bisa ±1 menit setelah update Chrome).")
                 say(f"     → JANGAN tutup jendela Chrome debug selama tool berjalan.")
-                say(f"     → Klik 'Buka Chrome 9222' lagi, lalu jalankan ulang tool.")
+                say(f"     → Klik 'Buka Chrome Debug' lagi, lalu jalankan ulang tool.")
                 sys.exit(1)
             time.sleep(3)
     say(f"  ❌ [ERROR] Gagal create chromedriver session setelah 3x: "
