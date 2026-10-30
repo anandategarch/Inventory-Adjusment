@@ -1,8 +1,14 @@
 """
-accurate_bot.py — logika otomasi Accurate Online (v4.11, pasangan ui_app.py v5.5).
+accurate_bot.py — logika otomasi Accurate Online (v4.12, pasangan ui_app.py v5.6).
 Flow terbukti: isi tanggal -> info -> upload -> konfirmasi -> simpan.
 Verifikasi ketat: tanggal, akun (harus sama target), cabang (reset + sama target).
 Pop-up: panduan upload diabaikan; hasil/error/stok diproses; LANJUTKAN otomatis.
+v4.12: FIX KRITIS 'Gagal upload: module selenium.webdriver.support has no
+  attribute expected_conditions' — proxy EC (v4.10) meresolve
+  expected_conditions via getattr(package) padahal itu SUBMODULE; di Selenium
+  asli getattr gagal kalau submodule belum pernah di-import. EC sekarang
+  di-import sebagai submodule langsung. TERBUKTI dengan Selenium asli
+  4.52 + Chromium asli (attach port 9222) — pola wait upload jalan lagi.
 v4.7: database COA & Keterangan dibaca otomatis dari folder aplikasi.
 v4.8: branchSet verify pakai contains match (Accurate branch list ada kode prefix).
 v4.11: MULTI-PORT — DEBUG_PORT dibaca dari env IA_DEBUG_PORT (default 9222).
@@ -58,10 +64,21 @@ class _LazySelenium:
     Semua pemakaian lama (By.CSS_SELECTOR, WebDriverWait(driver, 10),
     EC.presence_of_element_located) tetap bekerja TANPA perubahan — proxy
     meneruskan attribute access & pemanggilan ke object selenium asli.
+
+    v4.12 FIX KRITIS: expected_conditions adalah SUBMODULE, bukan attribute
+    package 'selenium.webdriver.support'. v4.10/v4.11 meresolve EC dengan
+    getattr(support, 'expected_conditions') → AttributeError di Selenium
+    ASLI ('module ... has no attribute expected_conditions') tepat saat
+    langkah upload file — persis error yang user laporkan. (Smoke test v4.10
+    pakai stub yang tanpa sengaja menyetel attribute itu, jadi lolos.)
+    Fix: attr_name sekarang OPSIONAL — tanpa attr_name, module_path di-import
+    LANGSUNG sebagai submodule (importlib.import_module mengembalikan
+    submodule-nya sendiri): EC = _LazySelenium(
+        'selenium.webdriver.support.expected_conditions').
     """
     __slots__ = ("_mod", "_attr", "_real")
 
-    def __init__(self, module_path, attr_name):
+    def __init__(self, module_path, attr_name=None):
         self._mod = module_path
         self._attr = attr_name
         self._real = None
@@ -69,8 +86,8 @@ class _LazySelenium:
     def _resolve(self):
         if self._real is None:
             import importlib
-            self._real = getattr(
-                importlib.import_module(self._mod), self._attr)
+            mod = importlib.import_module(self._mod)
+            self._real = getattr(mod, self._attr) if self._attr else mod
         return self._real
 
     def __getattr__(self, name):
@@ -83,11 +100,14 @@ class _LazySelenium:
 # Selenium LAZY (v4.10) — lihat docstring _LazySelenium di atas.
 # By/WebDriverWait/EC dipakai di banyak fungsi di file ini; proxy membuat
 # semuanya tetap kompatibel tanpa mengubah satu pun baris pemakaian.
+# v4.12: EC = SUBMODULE langsung (bukan getattr dari package support — itu
+# yang bikin 'Gagal upload: module selenium.webdriver.support has no
+# attribute expected_conditions' di Selenium asli).
 By = _LazySelenium("selenium.webdriver.common.by", "By")
 WebDriverWait = _LazySelenium("selenium.webdriver.support.ui", "WebDriverWait")
-EC = _LazySelenium("selenium.webdriver.support", "expected_conditions")
+EC = _LazySelenium("selenium.webdriver.support.expected_conditions")
 
-BOT_VERSION = "4.11"
+BOT_VERSION = "4.12"
 DEBUG_PORT = int(os.environ.get("IA_DEBUG_PORT", "9222"))  # v4.11: disinkronkan UI v5.5 (auto port-switch)
 
 MODE_APPROVE = "APPROVE"

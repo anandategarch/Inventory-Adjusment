@@ -1,6 +1,11 @@
 """
-ui_app.py — tampilan aplikasi Import IA (v5.5, pasangan accurate_bot.py v4.11).
+ui_app.py — tampilan aplikasi Import IA (v5.6, pasangan accurate_bot.py v4.12).
 Tab: Otomasi | Database COA & Keterangan | Download Draft IA | Download SJ GIS | Screen Shot Power BI.
+
+v5.6: bump pasangan accurate_bot.py v4.12 — FIX KRITIS 'Gagal upload: module
+  selenium.webdriver.support has no attribute expected_conditions' (bug proxy
+  EC lazy-import v4.10/v4.11; reproduksi + bukti fix pakai Selenium asli +
+  Chromium asli attach port 9222). Tidak ada perubahan logika UI lain.
 
 v5.5: FIX "Chrome 9222 tidak terdeteksi padahal sudah klik tombol Buka Chrome":
   ROOT CAUSE (deep): Chrome TIDAK PERNAH error kalau gagal bind port debug —
@@ -213,7 +218,7 @@ from tkinter import filedialog, messagebox, ttk
 # dari main.py lama). Kalau import/version gagal -> messagebox dialog (bukan traceback).
 try:
     import accurate_bot as bot
-    REQUIRED_BOT_VERSION = "4.11"
+    REQUIRED_BOT_VERSION = "4.12"
     if getattr(bot, "BOT_VERSION", None) != REQUIRED_BOT_VERSION:
         raise RuntimeError(
             "Versi file TIDAK SEPASANG.\n\n"
@@ -2872,6 +2877,6 @@ class AutoImportApp(tk.Tk):
 
 
 if __name__ == "__main__":
-    print(f"=== {APP_TITLE} — ui_app.py v5.5 (pasangan accurate_bot.py v4.11) ===")
+    print(f"=== {APP_TITLE} — ui_app.py v5.6 (pasangan accurate_bot.py v4.12) ===")
     app = AutoImportApp()
     app.mainloop()
