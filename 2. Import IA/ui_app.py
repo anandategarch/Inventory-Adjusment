@@ -1,6 +1,26 @@
 """
-ui_app.py — tampilan aplikasi Import IA (v5.7, pasangan accurate_bot.py v4.12).
+ui_app.py — tampilan aplikasi Import IA (v5.8, pasangan accurate_bot.py v4.12).
 Tab: Otomasi | Database COA & Keterangan | Download Draft IA | Download SJ GIS | Screen Shot Power BI.
+
+v5.8: TRACE PEMINDAHAN DOKUMEN — "tampilkan riwayat mereka beneran dipindah ke
+  folder mana, jangan ada silent error". v5.7 cuma log path RELATIF + hitungan
+  akhir; non-file (folder/symlink) di-skip DIAM-DIAM tanpa log → celah silent
+  error. v5.8 menutup celah:
+  1. LOG PATH ABSOLUT: setiap file log "[PINDAH] <src_file>" lalu "        →
+     <target_file>" — path lengkap, bisa di-copy ke Explorer untuk verifikasi.
+  2. POST-MOVE VERIFICATION: setelah shutil.move, cek (a) file tujuan ADA dan
+     (b) file sumber HILANG. Kalau salah satu tidak → [FAIL-VERIFY] (silent
+     error catcher — move klaim sukses tapi state inkonsisten).
+  3. NO SILENT SKIP: listdir diperiksa SEMUA entri. Non-file (folder/symlink)
+     dipisah dan di-log eksplisit "[INFO] Non-file/symlink di-skip" — tidak
+  ada lagi entri yang hilang tanpa jejak.
+  4. RECONCILIATION: total_sumber_file == dipindah + skip-ada + skip-nama +
+     gagal + gagal-verify. Selisih != 0 → "[PERHATIAN] N file TIDAK TERCATAT".
+  5. RIWAYAT SECTION: akhir log muncul tabel "NO | STATUS | FILENAME | PATH
+     TUJUAN" untuk SEMUA file (pindah/skip/gagal) — user bisa trace 1-per-1.
+  6. HISTORY FILE: trace lengkap + ringkasan ditulis ke
+     <app>/move_history/sj_move_YYYYMMDD_HHMMSS.log — persist di disk, bisa
+     dibuka ulang setelah app ditutup. Path di-echo ke UI log.
 
 v5.7: FITUR BARU tab Download SJ GIS — 'Pindahkan ke Folder Induk': pindahkan
   hasil dokumen (IT.YYYY.MM.NNNNN_DD-MM-YYYY_B.xxxx.RESTO.ext) ke struktur
@@ -247,6 +267,9 @@ DL_FOLDER_NAME = "Download Draft IA"
 DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads")
 DEFAULT_BRANCHES = "RESTO.PWKTAM, RESTO.KWGGAL"
 SETTINGS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui_settings.json")
+# v5.8: folder history pemindahan dokumen — 1 file per run, persist di disk
+# supaya user bisa trace ulang setelah app ditutup. Dibuat on-demand.
+SJ_HISTORY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "move_history")
 
 _FONT = "Segoe UI"
 _MONO = "Consolas"
@@ -323,7 +346,7 @@ def port_owner(port):
 
 
 # ============================================================
-# PEMINDAHAN DOKUMEN SJ → FOLDER INDUK (v5.7)
+# PEMINDAHAN DOKUMEN SJ → FOLDER INDUK (v5.8 — FULL TRACE + post-move verify)
 # Nama file output download_sj_gis.py sudah menyimpan "alamat":
 #   IT.2026.10.00510_01-10-2026_B.1001.MLGPAR.pdf
 #   └─ kode SJ         └ DD-MM-YYYY  └ cabang → resto = segmen terakhir
@@ -368,41 +391,157 @@ def sj_parse_move_target(filename, induk_dir):
 def sj_move_documents(src_dir, induk_dir, log):
     """Pindahkan SEMUA file SJ valid dari src_dir ke struktur folder induk.
 
-    Aturan (disepakati user):
+    v5.8 — FULL TRACE + post-move verification (tutup celah silent error):
+      - listdir diperiksa SEMUA entri. Non-file (folder/symlink) dipisah dan
+        di-log eksplisit — tidak ada lagi entri hilang tanpa jejak.
+      - Setiap file: log PATH ABSOLUT sumber + PATH ABSOLUT tujuan.
+      - Setelah shutil.move: VERIFY (a) file tujuan ADA, (b) file sumber
+        HILANG. Kalau salah satu tidak konsisten → [FAIL-VERIFY] (silent
+        error catcher — move klaim sukses tapi state tidak sesuai).
+      - Reconciliation: total_sumber == dipindah + skip-ada + skip-nama +
+        gagal + gagal-verify. Selisih != 0 → [PERHATIAN] silent error.
+      - res['trace'] berisi list tuple (filename, status, target_path,
+        catatan) — dipakai worker utk RIWAYAT section + history file.
+
+    Aturan lama tetap (disepakati user):
       - Folder target dibuat otomatis (resto/tahun/MM.BULAN/hari).
       - File sudah ada di tujuan → SKIP, tidak ditimpa.
       - Nama tidak match pola → SKIP + alasan.
-    log: callback teks, dipanggil per kejadian. Return dict ringkasan.
     """
     import shutil
-    res = {"moved": [], "skipped_exist": [], "skipped_name": [], "failed": []}
+    res = {"moved": [], "skipped_exist": [], "skipped_name": [],
+           "failed": [], "failed_verify": [], "non_file": [], "trace": []}
+    log(f"[INFO] Sumber  : {src_dir}")
+    log(f"[INFO] Induk   : {induk_dir}")
     try:
-        names = sorted(n for n in os.listdir(src_dir)
-                       if os.path.isfile(os.path.join(src_dir, n)))
+        all_entries = os.listdir(src_dir)
     except Exception as e:
         log(f"[ERROR] Tidak bisa membaca folder sumber: {e}")
         return res
-    for name in names:
+    # Pisah: file reguler vs non-file (folder / symlink / special). Non-file
+    # TIDAK diproses tapi HARUS di-log — kalau tidak, itu silent skip.
+    names = []
+    for n in all_entries:
+        full = os.path.join(src_dir, n)
+        if os.path.islink(full):
+            res["non_file"].append(n)
+        elif os.path.isfile(full):
+            names.append(n)
+        else:
+            res["non_file"].append(n)
+    log(f"[INFO] Total entri di sumber: {len(all_entries)} "
+        f"(file reguler: {len(names)}, non-file/symlink: {len(res['non_file'])})")
+    if res["non_file"]:
+        log(f"[INFO] Non-file/symlink di-skip (tidak diproses): "
+            + ", ".join(res["non_file"]))
+    for name in sorted(names):
         target_dir, err = sj_parse_move_target(name, induk_dir)
         if err:
             res["skipped_name"].append(name)
-            log(f"[SKIP] {name} — {err}")
+            log(f"[SKIP-NAMA] {name} — {err}")
+            res["trace"].append((name, "SKIP-NAMA", "", err))
             continue
         try:
             os.makedirs(target_dir, exist_ok=True)
             target_file = os.path.join(target_dir, name)
+            src_file = os.path.join(src_dir, name)
             if os.path.exists(target_file):
                 res["skipped_exist"].append(name)
-                log(f"[SKIP] {name} — sudah ada di tujuan")
+                log(f"[SKIP-ADA]  {name} — sudah ada di tujuan")
+                log(f"           tujuan: {target_file}")
+                res["trace"].append((name, "SKIP-ADA", target_file, "sudah ada"))
                 continue
-            shutil.move(os.path.join(src_dir, name), target_file)
-            res["moved"].append(name)
-            rel = os.path.relpath(target_dir, induk_dir)
-            log(f"[OK]   {name}  →  {rel}")
+            log(f"[PINDAH]   {src_file}")
+            log(f"        → {target_file}")
+            shutil.move(src_file, target_file)
+            # POST-MOVE VERIFICATION — silent error catcher.
+            dst_ok = os.path.isfile(target_file)
+            src_gone = not os.path.exists(src_file)
+            if dst_ok and src_gone:
+                res["moved"].append(name)
+                res["trace"].append((name, "OK", target_file, ""))
+            else:
+                # move klaim sukses tapi state inkonsisten → silent error!
+                detail = []
+                if not dst_ok:
+                    detail.append(f"file tujuan TIDAK ada: {target_file}")
+                if not src_gone:
+                    detail.append(f"file sumber MASIH ada: {src_file}")
+                msg = "; ".join(detail)
+                res["failed_verify"].append(name)
+                log(f"[FAIL-VERIFY] {name} — {msg}")
+                res["trace"].append((name, "FAIL-VERIFY", target_file, msg))
         except Exception as e:
             res["failed"].append(name)
             log(f"[FAIL] {name} — {type(e).__name__}: {e}")
+            res["trace"].append((name, "FAIL", "", f"{type(e).__name__}: {e}"))
+    # RECONCILIATION — total sumber harus == total terproses.
+    processed = (len(res["moved"]) + len(res["skipped_exist"])
+                 + len(res["skipped_name"]) + len(res["failed"])
+                 + len(res["failed_verify"]))
+    delta = len(names) - processed
+    log(f"[INFO] Reconciliation: sumber {len(names)} file — "
+        f"terproses {processed} (selisih {delta:+d})")
+    if delta != 0:
+        log(f"[PERHATIAN] {abs(delta)} file TIDAK TERCATAT — silent error! "
+            f"Cek listdir sumber vs trace.")
     return res
+
+
+def sj_write_history_file(res, src_dir, induk_dir, started_at, history_dir):
+    """Tulis trace pemindahan ke file persist (v5.8). Dipanggil worker setelah
+    sj_move_documents selesai. Return path file history (atau None kalau gagal).
+
+    Isi: header (waktu, sumber, induk) + tabel trace (NO|STATUS|FILENAME|PATH
+    TUJUAN|CATATAN) + ringkasan kategori + reconciliation. Format text polos
+    supaya bisa dibuka Notepad / di-copy ke Excel / chat.
+    """
+    try:
+        os.makedirs(history_dir, exist_ok=True)
+    except Exception:
+        return None
+    fname = started_at.strftime("sj_move_%Y%m%d_%H%M%S.log")
+    path = os.path.join(history_dir, fname)
+    lines = []
+    lines.append("=" * 72)
+    lines.append(f"RIWAYAT PEMINDAHAN DOKUMEN SJ — {started_at:%Y-%m-%d %H:%M:%S}")
+    lines.append("=" * 72)
+    lines.append(f"Sumber : {src_dir}")
+    lines.append(f"Induk  : {induk_dir}")
+    lines.append("")
+    lines.append("Ringkasan:")
+    lines.append(f"  Dipindah       : {len(res['moved'])}")
+    lines.append(f"  Skip (sudah ada): {len(res['skipped_exist'])}")
+    lines.append(f"  Skip (nama)    : {len(res['skipped_name'])}")
+    lines.append(f"  Gagal (move)   : {len(res['failed'])}")
+    lines.append(f"  Gagal (verify) : {len(res['failed_verify'])}")
+    if res.get("non_file"):
+        lines.append(f"  Non-file/symlink: {len(res['non_file'])}")
+    lines.append("")
+    lines.append("Trace per file (NO | STATUS | FILENAME | PATH TUJUAN | CATATAN):")
+    lines.append("-" * 72)
+    for i, (fn, status, tgt, note) in enumerate(res["trace"], 1):
+        lines.append(f"{i:>3} | {status:<11} | {fn} | {tgt} | {note}")
+    if not res["trace"]:
+        lines.append("(tidak ada file diproses)")
+    lines.append("-" * 72)
+    processed = (len(res["moved"]) + len(res["skipped_exist"])
+                 + len(res["skipped_name"]) + len(res["failed"])
+                 + len(res["failed_verify"]))
+    lines.append(f"Reconciliation: {len(res['trace'])} trace / {processed} terproses")
+    if res["failed"]:
+        lines.append("")
+        lines.append("File GAGAL (move exception): " + ", ".join(res["failed"]))
+    if res["failed_verify"]:
+        lines.append("")
+        lines.append("File FAIL-VERIFY (silent error): "
+                     + ", ".join(res["failed_verify"]))
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        return path
+    except Exception:
+        return None
 
 
 # ============================================================
@@ -1823,21 +1962,47 @@ class AutoImportApp(tk.Tk):
         self.sj_moving = True
         self.sj_move_btn.configure(state="disabled")
         self._ensure_sj_logwin()
-        self._sj_log_line(f"──── Pindah ke Folder Induk: {len(valid)} file ────")
+        self._sj_log_line(f"──── Pindah ke Folder Induk: {len(valid)} file (v5.8 trace) ────")
         threading.Thread(target=self._sj_move_worker, args=(src, induk),
                          daemon=True).start()
 
     def _sj_move_worker(self, src, induk):
-        """Jalan di thread: pindah + log per file + ringkasan. UI update via
-        ui_queue ('sj_move_done') — TIDAK menyentuh widget dari thread."""
+        """v5.8: full trace + RIWAYAT section + history file. Jalan di thread.
+        UI update via ui_queue ('sj_move_done') — TIDAK menyentuh widget dari
+        thread."""
+        started_at = datetime.now()
         res = sj_move_documents(src, induk, self._sj_log_line)
+        # RIWAYAT SECTION — tabel NO | STATUS | FILENAME | PATH TUJUAN
+        # supaya user bisa trace 1-per-1 di log UI.
+        self._sj_log_line("──── RIWAYAT PEMINDAHAN ────")
+        if not res["trace"]:
+            self._sj_log_line("(tidak ada file diproses)")
+        for i, (fn, status, tgt, note) in enumerate(res["trace"], 1):
+            if tgt:
+                self._sj_log_line(f"{i:>3} | {status:<11} | {fn} | {tgt} | {note}")
+            else:
+                self._sj_log_line(f"{i:>3} | {status:<11} | {fn} | (tidak ada) | {note}")
+        # Ringkasan kategori dengan daftar nama — bukan cuma hitungan.
         summary = (f"Ringkasan: {len(res['moved'])} dipindah, "
                    f"{len(res['skipped_exist'])} skip (sudah ada), "
                    f"{len(res['skipped_name'])} skip (nama tidak match), "
-                   f"{len(res['failed'])} gagal")
+                   f"{len(res['failed'])} gagal, "
+                   f"{len(res['failed_verify'])} gagal-verify (silent error!)")
         self._sj_log_line("──── " + summary + " ────")
         if res["failed"]:
-            self._sj_log_line("[PERHATIAN] File gagal: " + ", ".join(res["failed"]))
+            self._sj_log_line("[PERHATIAN] File gagal (move exception): "
+                             + ", ".join(res["failed"]))
+        if res["failed_verify"]:
+            self._sj_log_line("[PERHATIAN] File FAIL-VERIFY (silent error — "
+                             "move klaim sukses tapi state inkonsisten): "
+                             + ", ".join(res["failed_verify"]))
+        # HISTORY FILE — tulis trace ke disk supaya bisa dibuka ulang.
+        hist_path = sj_write_history_file(res, src, induk, started_at,
+                                          SJ_HISTORY_DIR)
+        if hist_path:
+            self._sj_log_line(f"[INFO] Riwayat lengkap ditulis ke file: {hist_path}")
+        else:
+            self._sj_log_line("[WARNING] Gagal menulis file riwayat ke disk.")
         self.ui_queue.put(("sj_move_done", summary))
 
     # ================= KODE GAGAL CARD (v4.13) =================
