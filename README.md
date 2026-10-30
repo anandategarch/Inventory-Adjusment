@@ -63,6 +63,7 @@ Import Inventory Adjustment ke Accurate Online. UI Tkinter + Selenium, dengan ma
 Download Surat Jalan dari modul Pemindahan Barang Accurate Online. Search kode SJ → klik baris → buka detail → download dokumen + rename ke `{kode}_{tanggal}_{cabang}.ext`.
 - **Via UI:** Tab "Download SJ GIS" → paste kodes → Mulai
 - **Standalone (optional):** `python download_sj_gis.py` (prompts for kodes via stdin)
+- **Pindah ke Folder Induk (v5.7):** setelah download, klik "Simpan Alamat Induk" (folder berisi folder resto: MLGPAR, BKSSUD, ...) + "Pilih Folder Sumber" → "Pindahkan ke Folder Induk". Nama file sudah menyimpan alamat lengkap: `IT.2026.10.00510_01-10-2026_B.1001.MLGPAR.pdf` → `[induk]/MLGPAR/2026/10.OKTOBER/1/`. Folder tujuan dibuat otomatis; file yang sudah ada di tujuan di-SKIP (tidak ditimpa); nama yang tidak match pola di-SKIP + alasan. Kedua path persist di `ui_settings.json`.
 
 ### 4. Screen Shot Power BI
 Screenshot dashboard Power BI per page × per resto. Pakai Playwright (headless Chromium). Output PNG/PDF di folder output.
@@ -118,6 +119,8 @@ launch Chrome otomatis dengan anti-throttle flags + pemilihan port bebas.
 
 ## Changelog
 
+- **v5.7** (ui_app.py): FITUR BARU tab Download SJ GIS — "Pindahkan ke Folder Induk": parse alamat dari nama file (`IT.YYYY.MM.NNNNN_DD-MM-YYYY_B.xxxx.RESTO.ext` → `[induk]/RESTO/TAHUN/MM.BULAN/HARI/`), tombol Simpan Alamat Induk + Pilih Folder Sumber + Pindahkan, folder dibuat otomatis, konflik skip (tidak menimpa), nama tidak match skip + alasan, log per file + ringkasan. Terbukti dengan uji parser + pemindahan file nyata + uji konflik run-2.
+- **v4.12/ui v5.6** (accurate_bot/ui_app): fix kritis 'Gagal upload: module selenium.webdriver.support has no attribute expected_conditions' (bug proxy EC lazy-import; terbukti dengan Selenium asli + Chromium asli attach port 9222).
 - **v9.4 / v7.3 / v8.17 / DETEKSI v2.1** (filter_pembuat_data / unduh_xls_loop / download_sj_gis / DETEKSI_HALAMAN): standalone AUTO-DETECT PORT 9222-9225 — Chrome yang hidup di 9223 tetap ketemu walau script dijalankan tanpa UI. Hint error kini menampilkan port aktual + nama tombol baru ('Buka Chrome Debug').
 - **v5.5** (ui_app.py): deep diagnosis port (netstat+tasklist di log — menjawab "ada apa di 9222") + AUTO PORT-SWITCH: kalau 9222 dipegang proses lain, Chrome debug diluncurkan di 9223/9224/9225. Port disinkronkan ke semua tab & subprocess (Import IA, Draft IA, SJ GIS) + persist di `ui_settings.json`.
 - **v5.1** (ui_app.py): Chrome anti-throttle flags di `_sj_launch_chrome` (`--disable-background-timer-throttling`, `--disable-backgrounding-occluded-windows`, `--disable-renderer-backgrounding`). Chrome aman di-background selama tool berjalan. README update "stay on Chrome" guidance.

@@ -1,6 +1,16 @@
 """
-ui_app.py — tampilan aplikasi Import IA (v5.6, pasangan accurate_bot.py v4.12).
+ui_app.py — tampilan aplikasi Import IA (v5.7, pasangan accurate_bot.py v4.12).
 Tab: Otomasi | Database COA & Keterangan | Download Draft IA | Download SJ GIS | Screen Shot Power BI.
+
+v5.7: FITUR BARU tab Download SJ GIS — 'Pindahkan ke Folder Induk': pindahkan
+  hasil dokumen (IT.YYYY.MM.NNNNN_DD-MM-YYYY_B.xxxx.RESTO.ext) ke struktur
+  [ALAMAT_INDUK]/RESTO/TAHUN/MM.BULAN/HARI/ otomatis — alamat lengkap sudah
+  tersimpan di nama file, tinggal parse. Tombol terpisah: 'Simpan Alamat
+  Induk' + 'Pilih Folder Sumber' + 'Pindahkan ke Folder Induk'. Folder tujuan
+  dibuat otomatis (tahun/bulan kadang 'random tidak ada' → program pastikan);
+  tanggal folder TANPA leading zero (1..31); konflik → SKIP (tidak ditimpa);
+  nama tidak match pola → SKIP + alasan. Kedua path persist di
+  ui_settings.json. Log jujur per file + ringkasan akhir.
 
 v5.6: bump pasangan accurate_bot.py v4.12 — FIX KRITIS 'Gagal upload: module
   selenium.webdriver.support has no attribute expected_conditions' (bug proxy
@@ -310,6 +320,89 @@ def port_owner(port):
         return pid, "?"
     except Exception:
         return None
+
+
+# ============================================================
+# PEMINDAHAN DOKUMEN SJ → FOLDER INDUK (v5.7)
+# Nama file output download_sj_gis.py sudah menyimpan "alamat":
+#   IT.2026.10.00510_01-10-2026_B.1001.MLGPAR.pdf
+#   └─ kode SJ         └ DD-MM-YYYY  └ cabang → resto = segmen terakhir
+# Target: [ALAMAT_INDUK]/MLGPAR/2026/10.OKTOBER/1/<file>
+# Folder dibuat otomatis (user: tahun/bulan "kadang ada kadang tidak" →
+# program yang memastikan ada). Tanggal folder TANPA leading zero (1..31).
+# ============================================================
+SJ_BULAN_MAP = {
+    "01": "01.JANUARI", "02": "02.FEBRUARI", "03": "03.MARET", "04": "04.APRIL",
+    "05": "05.MEI", "06": "06.JUNI", "07": "07.JULI", "08": "08.AGUSTUS",
+    "09": "09.SEPTEMBER", "10": "10.OKTOBER", "11": "11.NOVEMBER", "12": "12.DESEMBER",
+}
+SJ_MOVE_RE = re.compile(r"^IT\.\d{4}\.\d{2}\.\d+_(\d{2})-(\d{2})-(\d{4})_.+$")
+
+
+def sj_parse_move_target(filename, induk_dir):
+    """(target_dir, None) kalau nama valid, atau (None, alasan) kalau tidak.
+
+    Contoh: IT.2026.10.00510_01-10-2026_B.1001.MLGPAR.pdf
+      → induk_dir/MLGPAR/2026/10.OKTOBER/1
+    """
+    m = SJ_MOVE_RE.match(filename)
+    if not m:
+        return None, "nama tidak match pola IT.TAHUN.BULAN.NOMOR_DD-MM-YYYY_CABANG"
+    dd, mm, yyyy = m.group(1), m.group(2), m.group(3)
+    try:
+        hari = int(dd)
+    except ValueError:
+        return None, f"tanggal tidak valid: {dd}"
+    if not (1 <= hari <= 31):
+        return None, f"tanggal di luar 1-31: {dd}"
+    bulan = SJ_BULAN_MAP.get(mm)
+    if not bulan:
+        return None, f"bulan tidak dikenal: {mm}"
+    stem = os.path.splitext(filename)[0]
+    resto = stem.rsplit("_", 1)[-1].split(".")[-1].strip()
+    if not resto:
+        return None, "kode resto kosong (segmen terakhir nama)"
+    return os.path.join(induk_dir, resto, yyyy, bulan, str(hari)), None
+
+
+def sj_move_documents(src_dir, induk_dir, log):
+    """Pindahkan SEMUA file SJ valid dari src_dir ke struktur folder induk.
+
+    Aturan (disepakati user):
+      - Folder target dibuat otomatis (resto/tahun/MM.BULAN/hari).
+      - File sudah ada di tujuan → SKIP, tidak ditimpa.
+      - Nama tidak match pola → SKIP + alasan.
+    log: callback teks, dipanggil per kejadian. Return dict ringkasan.
+    """
+    import shutil
+    res = {"moved": [], "skipped_exist": [], "skipped_name": [], "failed": []}
+    try:
+        names = sorted(n for n in os.listdir(src_dir)
+                       if os.path.isfile(os.path.join(src_dir, n)))
+    except Exception as e:
+        log(f"[ERROR] Tidak bisa membaca folder sumber: {e}")
+        return res
+    for name in names:
+        target_dir, err = sj_parse_move_target(name, induk_dir)
+        if err:
+            res["skipped_name"].append(name)
+            log(f"[SKIP] {name} — {err}")
+            continue
+        try:
+            os.makedirs(target_dir, exist_ok=True)
+            target_file = os.path.join(target_dir, name)
+            if os.path.exists(target_file):
+                res["skipped_exist"].append(name)
+                log(f"[SKIP] {name} — sudah ada di tujuan")
+                continue
+            shutil.move(os.path.join(src_dir, name), target_file)
+            res["moved"].append(name)
+            rel = os.path.relpath(target_dir, induk_dir)
+            log(f"[OK]   {name}  →  {rel}")
+        except Exception as e:
+            res["failed"].append(name)
+            log(f"[FAIL] {name} — {type(e).__name__}: {e}")
+    return res
 
 
 # ============================================================
@@ -1022,8 +1115,34 @@ class AutoImportApp(tk.Tk):
         ttk.Button(sj_run_btns, text="📂  Buka Folder Unduhan",
                    command=self._sj_open_folder).pack(side="left")
 
+        # ---- v5.7: Pemindahan Dokumen ke Folder Induk ----
+        # Nama file hasil download sudah menyimpan alamat lengkap
+        # (IT.2026.10.00510_01-10-2026_B.1001.MLGPAR.pdf →
+        #  MLGPAR/2026/10.OKTOBER/1/) — fitur ini tinggal parse + pindah.
+        tk.Label(sj_ctl_card, text="Pindah dokumen ke Folder Induk:",
+                 bg=C_CARD, fg="#111827", font=(_FONT, 10, "bold"), anchor="w"
+                 ).grid(row=5, column=0, sticky="ew", padx=14, pady=(10, 2))
+        self.sj_doc_induk_lbl = tk.Label(sj_ctl_card, text="Folder induk : belum diset",
+                                         justify="left", anchor="w", bg=C_INFO_BG, fg="#475569",
+                                         padx=12, pady=6, font=F_BODY, wraplength=430)
+        self.sj_doc_induk_lbl.grid(row=6, column=0, sticky="ew", padx=14, pady=(0, 2))
+        self.sj_doc_src_lbl = tk.Label(sj_ctl_card, text="Folder sumber: belum diset",
+                                       justify="left", anchor="w", bg=C_INFO_BG, fg="#475569",
+                                       padx=12, pady=6, font=F_BODY, wraplength=430)
+        self.sj_doc_src_lbl.grid(row=7, column=0, sticky="ew", padx=14, pady=(0, 6))
+        sj_move_btns = tk.Frame(sj_ctl_card, bg=C_CARD)
+        sj_move_btns.grid(row=8, column=0, sticky="ew", padx=14, pady=(0, 6))
+        ttk.Button(sj_move_btns, text="📁  Simpan Alamat Induk",
+                   command=self._sj_pick_induk).pack(side="left", padx=(0, 6))
+        ttk.Button(sj_move_btns, text="📂  Pilih Folder Sumber",
+                   command=self._sj_pick_docsrc).pack(side="left", padx=(0, 6))
+        self.sj_move_btn = ttk.Button(sj_move_btns, text="📦  Pindahkan ke Folder Induk",
+                                      style="Success.TButton",
+                                      command=self._start_sj_move)
+        self.sj_move_btn.pack(side="left")
+
         sj_prog = tk.Frame(sj_ctl_card, bg=C_CARD)
-        sj_prog.grid(row=5, column=0, sticky="ew", padx=14, pady=(0, 4))
+        sj_prog.grid(row=9, column=0, sticky="ew", padx=14, pady=(0, 4))
         sj_prog.columnconfigure(0, weight=1)
         self.sj_progress = ttk.Progressbar(sj_prog, mode="determinate")
         self.sj_progress.grid(row=0, column=0, sticky="ew", padx=(0, 8))
@@ -1032,7 +1151,7 @@ class AutoImportApp(tk.Tk):
 
         self.sj_status_lbl = tk.Label(sj_ctl_card, text="Siap.", justify="left", anchor="w",
                                       bg=C_INFO_BG, fg="#334155", padx=12, pady=8, font=F_BODY)
-        self.sj_status_lbl.grid(row=6, column=0, sticky="ew", padx=14, pady=(0, 10))
+        self.sj_status_lbl.grid(row=10, column=0, sticky="ew", padx=14, pady=(0, 10))
 
         # v5.0: Card 3 (Log Download SJ) DIHAPUS — diganti popup log window
         # (SimpleLogPopup, buka via 'Log Proses' button di Card 2 atas, atau
@@ -1079,6 +1198,10 @@ class AutoImportApp(tk.Tk):
         # v5.5: port debug tersimpan dari run terakhir (bisa berubah otomatis
         # kalau 9222 dipakai proses lain). _load_sj_settings() membacanya.
         self.sj_debug_port = 9222
+        # v5.7: path pemindahan dokumen (persist di ui_settings.json).
+        self.sj_doc_induk = ""
+        self.sj_doc_src = ""
+        self.sj_moving = False
         # v5.4: cek Chrome DITUNDA via after(300) — ini cek jaringan (urllib,
         # timeout 2s kalau ada zombie di 9222); jangan blok pembangunan UI.
         self.after(300, self._sj_check_chrome)
@@ -1617,6 +1740,106 @@ class AutoImportApp(tk.Tk):
         self.sj_count_lbl.configure(text=f"{len(valid)} kode terdeteksi")
         self.sj_kodes = valid
 
+    # ================= PEMINDAHAN DOKUMEN → FOLDER INDUK (v5.7) =================
+    def _sj_short_path(self, p, maxlen=46):
+        """Path pendek utk label sempit: …<ekor path> (full tetap di log)."""
+        if not p:
+            return "belum diset"
+        if len(p) <= maxlen:
+            return p
+        return "…" + p[-(maxlen - 1):]
+
+    def _sj_refresh_doc_lbls(self):
+        self.sj_doc_induk_lbl.configure(
+            text=f"Folder induk : {self._sj_short_path(getattr(self, 'sj_doc_induk', ''))}")
+        self.sj_doc_src_lbl.configure(
+            text=f"Folder sumber: {self._sj_short_path(getattr(self, 'sj_doc_src', ''))}")
+
+    def _sj_pick_induk(self):
+        """Simpan ALAMAT INDUK — folder berisi folder2 resto (MLGPAR, BKSSUD, ...).
+        Persist di ui_settings.json supaya run berikutnya langsung terisi."""
+        d = filedialog.askdirectory(
+            title="Pilih ALAMAT INDUK — folder yang berisi folder resto (MLGPAR, BKSSUD, ...)",
+            parent=self)
+        if not d:
+            return
+        self.sj_doc_induk = os.path.normpath(d)
+        data = load_settings()
+        data["sj_doc_induk"] = self.sj_doc_induk
+        save_settings(data)
+        self._sj_refresh_doc_lbls()
+        self._sj_log_line(f"[INFO] Alamat induk disimpan: {self.sj_doc_induk}")
+
+    def _sj_pick_docsrc(self):
+        """Pilih FOLDER SUMBER — folder berisi file hasil download SJ."""
+        d = filedialog.askdirectory(
+            title="Pilih FOLDER SUMBER — folder berisi file hasil download SJ",
+            parent=self)
+        if not d:
+            return
+        self.sj_doc_src = os.path.normpath(d)
+        data = load_settings()
+        data["sj_doc_src"] = self.sj_doc_src
+        save_settings(data)
+        self._sj_refresh_doc_lbls()
+        self._sj_log_line(f"[INFO] Folder sumber disimpan: {self.sj_doc_src}")
+
+    def _start_sj_move(self):
+        """Validasi → konfirmasi (jujur: hitung dulu file yang match) → thread."""
+        if getattr(self, "sj_moving", False):
+            return
+        induk = getattr(self, "sj_doc_induk", "")
+        src = getattr(self, "sj_doc_src", "")
+        if not induk or not os.path.isdir(induk):
+            messagebox.showwarning(APP_TITLE,
+                "Alamat induk belum diset (atau foldernya sudah tidak ada).\n"
+                "Klik 'Simpan Alamat Induk' dulu.", parent=self)
+            return
+        if not src or not os.path.isdir(src):
+            messagebox.showwarning(APP_TITLE,
+                "Folder sumber belum diset (atau foldernya sudah tidak ada).\n"
+                "Klik 'Pilih Folder Sumber' dulu.", parent=self)
+            return
+        try:
+            names = [n for n in os.listdir(src)
+                     if os.path.isfile(os.path.join(src, n))]
+        except Exception as e:
+            messagebox.showerror(APP_TITLE,
+                f"Tidak bisa membaca folder sumber:\n{e}", parent=self)
+            return
+        valid = [n for n in names if SJ_MOVE_RE.match(n)]
+        if not valid:
+            messagebox.showinfo(APP_TITLE,
+                f"Tidak ada file dengan pola nama SJ\n"
+                f"(IT.TAHUN.BULAN.NOMOR_DD-MM-YYYY_CABANG) di:\n{src}\n\n"
+                f"Total {len(names)} file diperiksa.", parent=self)
+            return
+        if not messagebox.askyesno(APP_TITLE,
+                f"{len(valid)} file SJ siap dipindah ke:\n{induk}\n\n"
+                f"Folder tujuan dibuat otomatis (resto/tahun/bulan/tanggal).\n"
+                f"File yang sudah ada di tujuan akan di-SKIP (tidak ditimpa).\n\nLanjutkan?",
+                parent=self):
+            return
+        self.sj_moving = True
+        self.sj_move_btn.configure(state="disabled")
+        self._ensure_sj_logwin()
+        self._sj_log_line(f"──── Pindah ke Folder Induk: {len(valid)} file ────")
+        threading.Thread(target=self._sj_move_worker, args=(src, induk),
+                         daemon=True).start()
+
+    def _sj_move_worker(self, src, induk):
+        """Jalan di thread: pindah + log per file + ringkasan. UI update via
+        ui_queue ('sj_move_done') — TIDAK menyentuh widget dari thread."""
+        res = sj_move_documents(src, induk, self._sj_log_line)
+        summary = (f"Ringkasan: {len(res['moved'])} dipindah, "
+                   f"{len(res['skipped_exist'])} skip (sudah ada), "
+                   f"{len(res['skipped_name'])} skip (nama tidak match), "
+                   f"{len(res['failed'])} gagal")
+        self._sj_log_line("──── " + summary + " ────")
+        if res["failed"]:
+            self._sj_log_line("[PERHATIAN] File gagal: " + ", ".join(res["failed"]))
+        self.ui_queue.put(("sj_move_done", summary))
+
     # ================= KODE GAGAL CARD (v4.13) =================
     def _sj_set_failed_kodes(self, kodes_list):
         """Populate the 'Kode Gagal' card with failed kodes.
@@ -1820,17 +2043,24 @@ class AutoImportApp(tk.Tk):
         data = load_settings()
         data["sj_kodes"] = ", ".join(self.sj_kodes)
         data["sj_debug_port"] = getattr(self, "sj_debug_port", 9222)  # v5.5
+        data["sj_doc_induk"] = getattr(self, "sj_doc_induk", "")    # v5.7
+        data["sj_doc_src"] = getattr(self, "sj_doc_src", "")          # v5.7
         if not save_settings(data):
             self.log("Gagal menyimpan sj_kodes ke ui_settings.json.", "WARN")
 
     def _load_sj_settings(self):
-        """Load last kodes + port debug dari ui_settings.json."""
+        """Load last kodes + port debug + path pemindahan dokumen (v5.7)."""
         data = load_settings()
         # v5.5: port debug tersimpan (hasil auto-switch run terakhir).
         try:
             self.sj_debug_port = int(data.get("sj_debug_port") or 9222)
         except Exception:
             self.sj_debug_port = 9222
+        # v5.7: path pemindahan dokumen (kosong = belum pernah diset).
+        self.sj_doc_induk = (data.get("sj_doc_induk") or "").strip()
+        self.sj_doc_src = (data.get("sj_doc_src") or "").strip()
+        if hasattr(self, "sj_doc_induk_lbl"):
+            self._sj_refresh_doc_lbls()
         kodes = (data.get("sj_kodes") or "").strip()
         if kodes:
             self.sj_kodes_text.delete("1.0", "end")
@@ -2622,6 +2852,12 @@ class AutoImportApp(tk.Tk):
                 elif a == "sj_log":
                     # v5.0: route ke popup log window (replaces inline sj_text).
                     self._ensure_sj_logwin().append(item[1])
+                elif a == "sj_move_done":
+                    # v5.7: pemindahan dokumen selesai — aktifkan lagi tombol +
+                    # tampilkan ringkasan di status label.
+                    self.sj_moving = False
+                    self.sj_move_btn.configure(state="normal")
+                    self.sj_status_lbl.configure(text=item[1])
                 elif a == "sj_progress":
                     cur, tot = item[1]
                     self.sj_progress["maximum"] = max(tot, 1)
@@ -2877,6 +3113,6 @@ class AutoImportApp(tk.Tk):
 
 
 if __name__ == "__main__":
-    print(f"=== {APP_TITLE} — ui_app.py v5.6 (pasangan accurate_bot.py v4.12) ===")
+    print(f"=== {APP_TITLE} — ui_app.py v5.7 (pasangan accurate_bot.py v4.12) ===")
     app = AutoImportApp()
     app.mainloop()
