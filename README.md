@@ -110,6 +110,32 @@ Script standalone juga auto-detect (scan 9222-9225).
 **Tip:** Tab "Download SJ GIS" di UI punya tombol "Buka Chrome Debug" yang
 launch Chrome otomatis dengan anti-throttle flags + pemilihan port bebas.
 
+## Shortcut Sekali Klik - Buka Chrome Debug (tanpa buka aplikasi)
+
+Tidak mau buka `MULAI.bat` cuma untuk nyalakan Chrome debugging?
+Double-click saja **`BUKA_CHROME_DEBUG.bat`** (di folder utama repo).
+Script ini replika persis tombol "Buka Chrome Debug" di UI:
+
+1. Chrome debug sudah hidup di 9222-9225? → tidak di-launch ulang (session login aman).
+2. Cari `chrome.exe` otomatis (Program Files / x86 / LOCALAPPDATA / PATH).
+3. Tutup instance `ChromeDebugProfile` lama yang tanpa port (penyebab klasik "port tidak pernah aktif").
+4. Pilih port bebas pertama (9222 → 9223 → 9224 → 9225, auto-switch kalau 9222 dipakai proses lain).
+5. Launch Chrome + anti-throttle flags + buka `https://accurate.id`.
+6. Cek `/json/version` sampai 30 detik → `[OK]` atau `[FAIL]` + diagnosis lengkap.
+7. Port tersimpan ke `ui_settings.json` → UI & semua tool otomatis ikut port itu.
+
+**Biar makin sekali klik:** klik kanan `BUKA_CHROME_DEBUG.bat` → **Send to → Desktop (create shortcut)**.
+Chrome debug jadi bisa dinyalakan langsung dari desktop, tanpa buka aplikasi sama sekali.
+
+**Alternatif ultra-simpel (port fix 9223):** buat shortcut manual ke Chrome dengan argumen:
+
+```
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9223 --user-data-dir="C:\ChromeDebugProfile" --no-first-run --no-default-browser-check --hide-crash-restore-bubble --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding "https://accurate.id"
+```
+
+(Klik kanan desktop → New → Shortcut → paste baris di atas → beri nama "Chrome Debug".)
+Kekurangannya: port fix 9223 tanpa auto-detect & tanpa diagnosis — kalau 9223 kebetulan dipakai proses lain, pakai `BUKA_CHROME_DEBUG.bat` saja.
+
 ## Cara Download & Update
 
 1. Download ZIP repo: https://github.com/anandategarch/Inventory-Adjusment/archive/refs/heads/main.zip
@@ -119,6 +145,7 @@ launch Chrome otomatis dengan anti-throttle flags + pemilihan port bebas.
 
 ## Changelog
 
+- **Shortcut** (BUKA_CHROME_DEBUG.bat + chrome_debug.ps1): Chrome debugging SEKALI KLIK tanpa buka aplikasi — replika tombol "Buka Chrome Debug" (auto-port 9222-9225, anti-throttle flags, tutup instance lama tanpa port, cek /json/version 30s + diagnosis, sinkron port ke ui_settings.json tanpa BOM). Lihat bagian "Shortcut Sekali Klik".
 - **v5.7** (ui_app.py): FITUR BARU tab Download SJ GIS — "Pindahkan ke Folder Induk": parse alamat dari nama file (`IT.YYYY.MM.NNNNN_DD-MM-YYYY_B.xxxx.RESTO.ext` → `[induk]/RESTO/TAHUN/MM.BULAN/HARI/`), tombol Simpan Alamat Induk + Pilih Folder Sumber + Pindahkan, folder dibuat otomatis, konflik skip (tidak menimpa), nama tidak match skip + alasan, log per file + ringkasan. Terbukti dengan uji parser + pemindahan file nyata + uji konflik run-2.
 - **v4.12/ui v5.6** (accurate_bot/ui_app): fix kritis 'Gagal upload: module selenium.webdriver.support has no attribute expected_conditions' (bug proxy EC lazy-import; terbukti dengan Selenium asli + Chromium asli attach port 9222).
 - **v9.4 / v7.3 / v8.17 / DETEKSI v2.1** (filter_pembuat_data / unduh_xls_loop / download_sj_gis / DETEKSI_HALAMAN): standalone AUTO-DETECT PORT 9222-9225 — Chrome yang hidup di 9223 tetap ketemu walau script dijalankan tanpa UI. Hint error kini menampilkan port aktual + nama tombol baru ('Buka Chrome Debug').
