@@ -114,7 +114,9 @@ launch Chrome otomatis dengan anti-throttle flags + pemilihan port bebas.
 
 Tidak mau buka `MULAI.bat` cuma untuk nyalakan Chrome debugging?
 Double-click saja **`BUKA_CHROME_DEBUG.bat`** (di folder utama repo).
-Script ini replika persis tombol "Buka Chrome Debug" di UI:
+Script ini replika persis tombol "Buka Chrome Debug" di UI, dan **STANDALONE 100%** —
+tidak butuh `chrome_debug.ps1`, tidak butuh Python, tidak butuh PowerShell script-file
+(aman dari blokir execution policy laptop kantor):
 
 1. Chrome debug sudah hidup di 9222-9225? → tidak di-launch ulang (session login aman).
 2. Cari `chrome.exe` otomatis (Program Files / x86 / LOCALAPPDATA / PATH).
@@ -122,10 +124,23 @@ Script ini replika persis tombol "Buka Chrome Debug" di UI:
 4. Pilih port bebas pertama (9222 → 9223 → 9224 → 9225, auto-switch kalau 9222 dipakai proses lain).
 5. Launch Chrome + anti-throttle flags + buka `https://accurate.id`.
 6. Cek `/json/version` sampai 30 detik → `[OK]` atau `[FAIL]` + diagnosis lengkap.
-7. Port tersimpan ke `ui_settings.json` → UI & semua tool otomatis ikut port itu.
+7. Port tersimpan ke `ui_settings.json` (opsional, kalau PowerShell tidak diblokir) → UI ikut port itu.
 
 **Biar makin sekali klik:** klik kanan `BUKA_CHROME_DEBUG.bat` → **Send to → Desktop (create shortcut)**.
 Chrome debug jadi bisa dinyalakan langsung dari desktop, tanpa buka aplikasi sama sekali.
+
+**Chrome tidak terbuka saat double-click?** Cek urut ini:
+
+1. **SmartScreen** — muncul "Windows protected your PC"? Klik **More info → Run anyway**,
+   atau klik kanan file → **Properties** → centang **Unblock** → OK (cukup sekali).
+2. **Jangan jalankan dari dalam ZIP** — ekstrak dulu ke folder biasa
+   (mis. `C:\Inventory-Adjusment\`), baru double-click .bat-nya.
+3. **Window hitam sekarang TIDAK tutup sendiri saat error** — baca pesannya:
+   - `chrome.exe TIDAK DITEMUKAN` → Chrome tidak ada di lokasi standar (pakai shortcut manual di bawah, cek path via `chrome://version`).
+   - `[FAIL] Chrome TIDAK menjawab...` → ikuti solusi yang tampil di layar (paling sering: tutup SEMUA Chrome lalu klik lagi; atau policy kantor memblokir debugging).
+4. Kalau tetap gagal, screenshot pesan di window hitam itu dan laporkan.
+
+(`chrome_debug.ps1` tetap ada sebagai versi PowerShell ber-diagnosis-detail — opsional, tidak diperlukan .bat.)
 
 **Alternatif ultra-simpel (port fix 9223):** buat shortcut manual ke Chrome dengan argumen:
 
@@ -133,8 +148,10 @@ Chrome debug jadi bisa dinyalakan langsung dari desktop, tanpa buka aplikasi sam
 "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9223 --user-data-dir="C:\ChromeDebugProfile" --no-first-run --no-default-browser-check --hide-crash-restore-bubble --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding "https://accurate.id"
 ```
 
-(Klik kanan desktop → New → Shortcut → paste baris di atas → beri nama "Chrome Debug".)
-Kekurangannya: port fix 9223 tanpa auto-detect & tanpa diagnosis — kalau 9223 kebetulan dipakai proses lain, pakai `BUKA_CHROME_DEBUG.bat` saja.
+(Klik kanan desktop → New → Shortcut → paste baris di atas → beri nama "Chrome Debug".
+Kalau shortcut tidak bereaksi sama sekali, path chrome.exe salah — cek lokasi asli di
+`chrome://version` kolom "Executable Path" lalu sesuaikan. Kekurangan: port fix 9223 tanpa
+auto-detect & tanpa diagnosis — kalau 9223 dipakai proses lain, pakai `BUKA_CHROME_DEBUG.bat`.)
 
 ## Cara Download & Update
 
